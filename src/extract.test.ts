@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dedupeRules, extractRules, filterComments, isSingleReviewer } from "./extract.js";
+import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeSharedSources } from "./extract.js";
 import type { Rule } from "./rule.js";
 import type { ReviewComment } from "./github.js";
 import type { Llm } from "./llm.js";
@@ -46,6 +46,7 @@ describe("extractRules", () => {
       {
         rules: [{ description: "Add a rate limit to every new endpoint", scope: ["src/api/**"], commentIds: [1, 2] }],
       },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
     );
     const rules = await extractRules([comment(1), comment(2), comment(3)], llm);
     expect(rules).toHaveLength(1);
@@ -130,7 +131,11 @@ describe("extractRules quality guards", () => {
   const merge = { items: [{ id: 1, principle: "P" }, { id: 2, principle: "P" }] };
 
   it("lowers confidence and flags rules backed by one reviewer", async () => {
-    const llm = fakeLlm(merge, { rules: [{ description: "P", scope: [], commentIds: [1, 2] }] });
+    const llm = fakeLlm(
+      merge,
+      { rules: [{ description: "P", scope: [], commentIds: [1, 2] }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+    );
     const rules = await extractRules([comment(1, { reviewer: "anna" }), comment(2, { reviewer: "anna" })], llm);
     expect(isSingleReviewer(rules[0]!)).toBe(true);
     expect(rules[0]!.confidence).toBeCloseTo(0.3);
@@ -157,10 +162,76 @@ describe("extractRules quality guards", () => {
         { description: "Use gate() in tests", scope: [], commentIds: [1, 2] },
         { description: "Gate tests with @gate", scope: [], commentIds: [3, 4] },
       ] },
+      { rules: [
+        { index: 0, supportingIds: [1, 2], revisedDescription: null },
+        { index: 1, supportingIds: [3, 4], revisedDescription: null },
+      ] },
       { groups: [[0, 1]] },
     );
     const rules = await extractRules([1, 2, 3, 4].map((i) => comment(i)), llm);
     expect(rules).toHaveLength(1);
     expect(rules[0]!.sources).toHaveLength(4);
+  });
+});
+
+describe("filterComments accuracy guards", () => {
+  it("drops comments written by the pull request author", () => {
+    const kept = filterComments([comment(1), comment(2, { byPullRequestAuthor: true })]);
+    expect(kept.map((c) => c.id)).toEqual([1]);
+  });
+
+  it("counts identical text from one reviewer on one PR once, but not across PRs", () => {
+    const kept = filterComments([
+      comment(1, { prNumber: 5, reviewer: "anna" }),
+      comment(2, { prNumber: 5, reviewer: "anna", body: "  PLEASE add a rate  limit to this new endpoint. " }),
+      comment(3, { prNumber: 6, reviewer: "anna" }),
+      comment(4, { prNumber: 5, reviewer: "bob" }),
+    ]);
+    expect(kept.map((c) => c.id)).toEqual([1, 3, 4]);
+  });
+});
+
+describe("auditSupport", () => {
+  const byId = (...ids: number[]) => new Map(ids.map((id) => [id, comment(id)]));
+  const opts = { minOccurrences: 2, minPullRequests: 2 };
+  const base = (): Rule => rule("a", "Do X everywhere", [src(1, "anna"), src(2, "bob"), src(3, "cy")]);
+
+  it("keeps only supporting sources and narrows overreaching text", async () => {
+    const llm = fakeLlm({ rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: "Do X in TypeScript files" }] });
+    const { rules, dropped } = await auditSupport([base()], byId(1, 2, 3), llm, opts);
+    expect(dropped).toBe(0);
+    expect(rules[0]!.description).toBe("Do X in TypeScript files");
+    expect(rules[0]!.sources.map((x) => x.prNumber)).toEqual([1, 2]);
+  });
+
+  it("drops a rule left with fewer than two supporting comments", async () => {
+    const llm = fakeLlm({ rules: [{ index: 0, supportingIds: [1], revisedDescription: null }] });
+    const { rules, dropped } = await auditSupport([base()], byId(1, 2, 3), llm, opts);
+    expect(rules).toEqual([]);
+    expect(dropped).toBe(1);
+  });
+
+  it("drops a rule whose supporting comments come from one pull request", async () => {
+    const same = rule("a", "Do X", [src(1, "anna", 1), src(1, "bob", 2)]);
+    const llm = fakeLlm({ rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] });
+    expect((await auditSupport([same], byId(1, 2), llm, opts)).rules).toEqual([]);
+  });
+
+  it("keeps a rule the model skipped instead of losing it silently", async () => {
+    const llm = fakeLlm({ rules: [] });
+    const { rules } = await auditSupport([base()], byId(1, 2, 3), llm, opts);
+    expect(rules).toHaveLength(1);
+  });
+});
+
+describe("mergeSharedSources", () => {
+  it("merges rules that rest on the same comments and keeps unrelated ones", () => {
+    const merged = mergeSharedSources([
+      rule("a", "Use gate()", [src(1, "anna"), src(2, "bob")]),
+      rule("b", "Gate tests on flags", [src(1, "anna"), src(2, "bob"), src(3, "cy")]),
+      rule("c", "Name hooks use*", [src(7, "anna"), src(8, "bob")]),
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((r) => r.sources.some((x) => x.prNumber === 3))!.sources).toHaveLength(3);
   });
 });

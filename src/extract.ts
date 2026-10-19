@@ -27,9 +27,23 @@ const SINGLE_REVIEWER_FACTOR = 0.75;
 /** Candidates merged per model call; larger inputs overflow the output limit. */
 const MERGE_BATCH_SIZE = 150;
 
-/** Keep top-level, substantive comments; replies and one-word approvals carry no rule. */
+const normalizeBody = (body: string) => body.toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * Keep top-level, substantive review comments. Replies and one-word approvals carry no rule,
+ * a PR author describing their own change is not a reviewer asking for something, and the
+ * same text posted twice by one reviewer on one PR is one piece of evidence, not two.
+ */
 export function filterComments(comments: ReviewComment[]): ReviewComment[] {
-  return comments.filter((c) => c.inReplyTo === undefined && c.body.trim().length >= MIN_BODY_LENGTH);
+  const seen = new Set<string>();
+  return comments.filter((c) => {
+    if (c.inReplyTo !== undefined || c.byPullRequestAuthor) return false;
+    if (c.body.trim().length < MIN_BODY_LENGTH) return false;
+    const key = `${c.reviewer}|${c.prNumber}|${normalizeBody(c.body)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 const PrinciplesSchema = z.object({
@@ -193,6 +207,114 @@ function rankRules(rules: Rule[]): Rule[] {
 /** True when a rule rests on a single reviewer's taste rather than team consensus. */
 export const isSingleReviewer = (r: Rule): boolean => reviewerCount(r) < 2;
 
+const SupportSchema = z.object({
+  rules: z.array(
+    z.object({
+      index: z.number(),
+      /** Ids of the comments that each clearly state this rule as a general requirement. */
+      supportingIds: z.array(z.number()),
+      /** Narrower wording, only when the rule text claims more than the supporting comments say. */
+      revisedDescription: z.string().nullable(),
+    }),
+  ),
+});
+
+const SUPPORT_BATCH_SIZE = 8;
+const SUPPORT_COMMENT_CHARS = 500;
+
+function supportPrompt(rules: Rule[], byId: Map<number, ReviewComment>): string {
+  const blocks = rules
+    .map((r, i) => {
+      const comments = r.sources
+        .map((s) => idOfUrl(s.commentUrl))
+        .flatMap((id) => (id !== undefined && byId.has(id) ? [byId.get(id)!] : []))
+        .map((c) => `  [${c.id}] ${c.path}: ${c.body.trim().replace(/\s+/g, " ").slice(0, SUPPORT_COMMENT_CHARS)}`)
+        .join("\n");
+      return `Rule ${i}: ${r.description}\nComments:\n${comments}`;
+    })
+    .join("\n\n");
+  return `You audit rules mined from code review comments. For each rule, decide which of its comments each independently support the rule as worded.
+
+A comment supports a rule only if the reviewer asks for the same thing the rule states, as a general expectation. Do NOT count a comment that:
+- is a one-time exception, a backport remark, a special case, or a trivial optimisation note
+- is about a narrower language, framework, directory or situation than the rule claims
+- only mentions the topic without asking for the rule's behaviour
+
+If the supporting comments agree on a narrower scope than the rule text claims (for example the rule says Flow but they discuss TypeScript, or says "all packages" but they discuss one), return a revisedDescription that states exactly that narrower scope, as one imperative sentence. Otherwise return null.
+
+Return one entry per rule, using its index. List only the supporting comment ids.
+
+${blocks}`;
+}
+
+/** The comment id embedded in a `#discussion_r<id>` url. */
+const idOfUrl = (url: string): number | undefined => {
+  const m = /#discussion_r(\d+)$/.exec(url);
+  return m ? Number(m[1]) : undefined;
+};
+
+/**
+ * Accuracy pass: keep only the sources that really support each rule, narrow rule text that
+ * claims more than its evidence, and drop rules left with too little evidence.
+ */
+export async function auditSupport(
+  rules: Rule[],
+  byId: Map<number, ReviewComment>,
+  llm: Llm,
+  opts: { minOccurrences: number; minPullRequests: number },
+): Promise<{ rules: Rule[]; dropped: number }> {
+  const out: Rule[] = [];
+  let dropped = 0;
+  for (let i = 0; i < rules.length; i += SUPPORT_BATCH_SIZE) {
+    const batch = rules.slice(i, i + SUPPORT_BATCH_SIZE);
+    const verdicts = new Map((await llm.parse(supportPrompt(batch, byId), SupportSchema)).rules.map((v) => [v.index, v]));
+    batch.forEach((rule, index) => {
+      const verdict = verdicts.get(index);
+      // No verdict means the model skipped the rule; keep it unaudited rather than lose it silently.
+      if (!verdict) return void out.push(rule);
+      const supporting = new Set(verdict.supportingIds);
+      const sources = rule.sources.filter((s) => {
+        const id = idOfUrl(s.commentUrl);
+        return id !== undefined && supporting.has(id);
+      });
+      if (sources.length < opts.minOccurrences || new Set(sources.map((s) => s.prNumber)).size < opts.minPullRequests) {
+        dropped++;
+        return;
+      }
+      out.push({
+        ...rule,
+        description: verdict.revisedDescription?.trim() || rule.description,
+        sources,
+        confidence: confidenceFor(sources),
+      });
+    });
+  }
+  return { rules: out, dropped };
+}
+
+/** Merge rules whose evidence is mostly the same comments: they are one rule worded twice. */
+export function mergeSharedSources(rules: Rule[], threshold = 0.5): Rule[] {
+  const ranked = rankRules(rules);
+  const kept: Rule[] = [];
+  for (const rule of ranked) {
+    const urls = new Set(rule.sources.map((s) => s.commentUrl));
+    const twin = kept.find((k) => {
+      const shared = k.sources.filter((s) => urls.has(s.commentUrl)).length;
+      return shared / Math.min(k.sources.length, urls.size) >= threshold;
+    });
+    if (!twin) {
+      kept.push(rule);
+      continue;
+    }
+    const pooled = new Map(twin.sources.map((s) => [s.commentUrl, s]));
+    for (const s of rule.sources) pooled.set(s.commentUrl, s);
+    twin.sources = [...pooled.values()];
+    twin.scope = [...new Set([...twin.scope, ...rule.scope])];
+    twin.confidence = confidenceFor(twin.sources);
+  }
+  return rankRules(kept);
+}
+
 /** Turn review comments into rules, citing the comments each rule came from. */
 export async function extractRules(
   comments: ReviewComment[],
@@ -262,8 +384,14 @@ export async function extractRules(
   log(
     `Kept ${rules.length} of ${merged.length} merged rules; dropped ${tooFewComments} with fewer than ${minOccurrences} comments and ${tooFewPrs} with fewer than ${minPullRequests} distinct pull requests`,
   );
-  if (rules.length < 2) return rules;
-  const deduped = await dedupeRules(rules, llm);
-  if (deduped.length < rules.length) log(`Merged ${rules.length - deduped.length} near-duplicate rules`);
+  if (rules.length === 0) return rules;
+
+  log(`Auditing ${rules.length} rules against the comments they cite`);
+  const audited = await auditSupport(rules, byId, llm, { minOccurrences, minPullRequests });
+  if (audited.dropped > 0) log(`Dropped ${audited.dropped} rules whose comments do not support them`);
+  if (audited.rules.length < 2) return audited.rules;
+
+  const deduped = mergeSharedSources(await dedupeRules(audited.rules, llm));
+  if (deduped.length < audited.rules.length) log(`Merged ${audited.rules.length - deduped.length} near-duplicate rules`);
   return deduped;
 }
