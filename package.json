@@ -18,7 +18,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "^3.23.8"
+    "@anthropic-ai/sdk": "^0.135.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
