@@ -64,6 +64,8 @@ export interface ReviewComment {
   createdAt: string;
   /** Set when the comment is a reply in a thread. */
   inReplyTo?: number;
+  /** True when the commenter is the author of the pull request (self-statements are not reviews). */
+  byPullRequestAuthor?: boolean;
 }
 
 const ApiCommentSchema = z.object({
@@ -76,6 +78,7 @@ const ApiCommentSchema = z.object({
   html_url: z.string(),
   created_at: z.string(),
   in_reply_to_id: z.number().optional(),
+  author_association: z.string().optional(),
 });
 
 export interface FetchOptions {
@@ -151,6 +154,7 @@ export async function fetchReviewComments(
         url: `https://github.com/${repo}/pull/${prNumber}#discussion_r${c.id}`,
         createdAt: c.created_at,
         inReplyTo: c.in_reply_to_id,
+        byPullRequestAuthor: c.author_association === "AUTHOR",
       });
     }
     if (items.length < 100) break;
