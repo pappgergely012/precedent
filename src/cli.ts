@@ -4,16 +4,17 @@ import { parseArgs } from "node:util";
 import { parseDiff } from "./diff.js";
 import { extractRules, isSingleReviewer } from "./extract.js";
 import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
-import { anthropicLlm } from "./llm.js";
+import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
+import { fileCache } from "./cache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
 import { summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--verify] [--docs]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer]
   precedent stability <owner/repo> [--runs N] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
@@ -29,6 +30,7 @@ const { positionals, values } = parseArgs({
     diff: { type: "string" },
     post: { type: "boolean" },
     verify: { type: "boolean" },
+    cache: { type: "string" },
     docs: { type: "boolean" },
     "max-pages": { type: "string" },
     runs: { type: "string" },
@@ -83,6 +85,7 @@ async function main(): Promise<void> {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
+      cache: values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined,
       onProgress: progress,
     });
     if (values.verify) {
