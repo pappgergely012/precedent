@@ -9,12 +9,19 @@ export const RulesFileSchema = z.object({
   repo: z.string(),
   minedAt: z.string(),
   rules: z.array(RuleSchema),
+  /** Rules the guide states that no review evidence backs (only with `mine --docs`). */
+  documentedOnly: z.array(z.object({ description: z.string(), path: z.string(), quote: z.string() })).optional(),
 });
 
 export type RulesFile = z.infer<typeof RulesFileSchema>;
 
-export async function writeRulesFile(path: string, repo: string, rules: Rule[]): Promise<void> {
-  const file: RulesFile = { version: 1, repo, minedAt: new Date().toISOString(), rules };
+export async function writeRulesFile(
+  path: string,
+  repo: string,
+  rules: Rule[],
+  documentedOnly?: RulesFile["documentedOnly"],
+): Promise<void> {
+  const file: RulesFile = { version: 1, repo, minedAt: new Date().toISOString(), rules, ...(documentedOnly ? { documentedOnly } : {}) };
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(file, null, 2)}\n`);
 }

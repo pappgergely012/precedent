@@ -10,6 +10,13 @@ export const RuleSchema = z.object({
   badExample: z.string().optional(),
   /** 0..1, raised when comments are accepted, lowered when dismissed. */
   confidence: z.number().min(0).max(1),
+  /**
+   * Set by `mine --docs`: "enforced" (only in review comments), "both" (also in the written guide)
+   * or "conflict" (the guide says something that contradicts it).
+   */
+  origin: z.enum(["enforced", "both", "conflict"]).optional(),
+  /** Where the guide states (or contradicts) the rule, quoted verbatim. */
+  docRefs: z.array(z.object({ path: z.string(), quote: z.string() })).optional(),
   /** Review comments this rule was derived from. */
   sources: z
     .array(
