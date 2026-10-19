@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources } from "./extract.js";
+import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources, mergeWithPreClusters, preClusters } from "./extract.js";
 import type { Rule } from "./rule.js";
 import type { ReviewComment } from "./github.js";
 import type { Llm } from "./llm.js";
@@ -320,5 +320,58 @@ describe("batch concurrency", () => {
     const rules = await extractRules(comments, llm, { batchSize: 1, concurrency: 4 });
     expect(rules).toHaveLength(1);
     expect(rules[0]!.sources).toHaveLength(4);
+  });
+});
+
+describe("pre-merge of near-identical candidates", () => {
+  const cand = (id: number, principle: string) => ({ id, principle });
+  const gate = [
+    cand(1, "Use assertConsoleErrorDev to assert console.error output in tests"),
+    cand(2, "Use assertConsoleErrorDev to assert console.error calls in tests"),
+    cand(3, "Use assertConsoleErrorDev for asserting console.error output in tests"),
+  ];
+  const unrelated = [cand(10, "Name hooks with a use prefix"), cand(11, "Wrap lines at 79 columns in documentation")];
+
+  it("clusters candidates whose wording is almost the same, and only those", () => {
+    expect(preClusters([...gate, ...unrelated])).toEqual([[1, 2, 3]]);
+    expect(preClusters(unrelated)).toEqual([]);
+  });
+
+  it("is deterministic and respects the cluster size cap", () => {
+    const many = Array.from({ length: 12 }, (_, i) => cand(i + 1, "Use assertConsoleErrorDev to assert console.error output in tests"));
+    const a = preClusters(many, { maxSize: 5 });
+    expect(preClusters(many, { maxSize: 5 })).toEqual(a);
+    expect(a.every((c) => c.length <= 5)).toBe(true);
+    expect(a.flat().length).toBeGreaterThan(5);
+  });
+
+  it("keeps a cluster the model leaves alone as a rule of its own, with every member", async () => {
+    // The model sees representatives only (1, 10, 11) and groups none of them.
+    const llm = fakeLlm({ rules: [] });
+    const merged = await mergeWithPreClusters([...gate, ...unrelated], llm);
+    expect(merged).toEqual([{ description: "Use assertConsoleErrorDev to assert console.error output in tests", scope: [], commentIds: [1, 2, 3] }]);
+  });
+
+  it("expands a group the model forms around a representative to all cluster members", async () => {
+    const llm = fakeLlm({ rules: [{ description: "Console and naming conventions", scope: [], commentIds: [1, 10] }] });
+    const merged = await mergeWithPreClusters([...gate, ...unrelated], llm);
+    expect(merged).toEqual([{ description: "Console and naming conventions", scope: [], commentIds: [1, 2, 3, 10] }]);
+  });
+
+  it("shows the model only the representatives", async () => {
+    const seen: string[] = [];
+    const llm: Llm = { parse: async (prompt, schema) => { seen.push(prompt); return schema.parse({ rules: [] }); } };
+    await mergeWithPreClusters([...gate, ...unrelated], llm);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("[1]");
+    expect(seen[0]).not.toContain("[2]");
+    expect(seen[0]).not.toContain("[3]");
+    expect(seen[0]).toContain("[10]");
+  });
+
+  it("falls back to the plain merge when nothing clusters", async () => {
+    const llm = fakeLlm({ rules: [{ description: "Both conventions", scope: [], commentIds: [10, 11] }] });
+    const merged = await mergeWithPreClusters(unrelated, llm);
+    expect(merged).toEqual([{ description: "Both conventions", scope: [], commentIds: [10, 11] }]);
   });
 });

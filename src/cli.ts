@@ -43,6 +43,7 @@ const { positionals, values } = parseArgs({
     "include-single-reviewer": { type: "boolean" },
     "include-emerging": { type: "boolean" },
     all: { type: "boolean" },
+    "pre-merge": { type: "boolean" },
     verbose: { type: "boolean" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
+      preMerge: values["pre-merge"],
       cache: values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined,
       onProgress: progress,
     });
@@ -165,7 +167,7 @@ async function main(): Promise<void> {
     const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
+      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
     const cuts = stabilityCuts(results, top);
