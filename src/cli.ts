@@ -12,6 +12,7 @@ import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from ".
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
 import { describeEstimate, estimateUsage } from "./estimate.js";
 import { renderMineOutput } from "./mineoutput.js";
+import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
@@ -19,7 +20,7 @@ const USAGE = `Usage:
   precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--pre-merge] [--dry-run] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
   precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
-  precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
+  precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
   precedent review --diff FILE [--rules FILE]`;
 
 const DEFAULT_RULES_FILE = ".precedent/rules.json";
@@ -44,6 +45,7 @@ const { positionals, values } = parseArgs({
     "include-single-reviewer": { type: "boolean" },
     "include-emerging": { type: "boolean" },
     all: { type: "boolean" },
+    redact: { type: "boolean" },
     "pre-merge": { type: "boolean" },
     "dry-run": { type: "boolean" },
     verbose: { type: "boolean" },
@@ -79,6 +81,18 @@ const stageLog = (run: number) => (message: string) => {
   if (/^(\d+ candidate rules|Merged into|Kept \d+|Dropped|Merged \d+ near|Merge level)/.test(message)) console.log(`  run ${run}: ${message}`);
 };
 
+/** With --redact, mask obvious secrets and emails in text before it can reach a prompt. Applied once, at the boundary. */
+function redactor(): { text: (s: string) => string; report: () => void } {
+  const r = createRedactor(!!values.redact);
+  return {
+    text: r.text,
+    report: () => {
+      const line = r.line();
+      if (line) console.log(line);
+    },
+  };
+}
+
 const progress = (message: string) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${message}`);
 
 async function main(): Promise<void> {
@@ -93,6 +107,9 @@ async function main(): Promise<void> {
     });
     const prs = new Set(comments.map((c) => c.prNumber));
     console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
+    const mask = redactor();
+    const sendable = values.redact ? comments.map((c) => ({ ...c, body: mask.text(c.body) })) : comments;
+    mask.report();
     if (values["dry-run"]) {
       const usable = selectUsable(comments, { maxComments: intFlag("max-comments", 1000), maxAgeDays: intFlag("max-age-days", 730) });
       const cache = values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
@@ -102,7 +119,7 @@ async function main(): Promise<void> {
     }
 
     const llm = anthropicLlm();
-    let rules = await extractRules(comments, llm, {
+    let rules = await extractRules(sendable, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
@@ -117,7 +134,9 @@ async function main(): Promise<void> {
     }
     let documentedOnly: DocRule[] | undefined;
     if (values.docs && rules.length > 0) {
-      const docs = await fetchGuideDocs(repo, { token: process.env.GITHUB_TOKEN });
+      const docMask = redactor();
+      const docs = (await fetchGuideDocs(repo, { token: process.env.GITHUB_TOKEN })).map((d) => ({ ...d, text: docMask.text(d.text) }));
+      docMask.report();
       if (docs.length === 0) {
         console.log("No contributor guide found (CONTRIBUTING.md, AGENTS.md, ...); skipping the documented-vs-enforced check.");
       } else {
@@ -170,13 +189,16 @@ async function main(): Promise<void> {
     const top = intFlag("top", 10);
     const comments = await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) });
     console.log(`Fetched ${comments.length} review comments once; mining ${runs} times (each run costs about as much as one \`mine\`).`);
+    const stabilityMask = redactor();
+    const sendableComments = values.redact ? comments.map((c) => ({ ...c, body: stabilityMask.text(c.body) })) : comments;
+    stabilityMask.report();
     // With --pin-extraction the per-comment judgements of run 1 are reused, which isolates the
     // variance of the merge and audit steps from the variance of the extraction step.
     const pinned = values["pin-extraction"] ? memoryCache() : undefined;
     const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
+      results.push(await extractRules(sendableComments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
     const cuts = stabilityCuts(results, top);
@@ -189,7 +211,7 @@ async function main(): Promise<void> {
     row(`top ${top}`, cuts.top);
     row("all rules", cuts.all);
     row("core rules", cuts.core);
-    console.log(`Core rules (3+ comments from 2+ reviewers, or confidence 0.6+): ${cuts.coreRetention.coreRules.join("/")} per run; the share of a run's core rules that every other run also has: mean ${f(cuts.coreRetention.mean)}, worst ${f(cuts.coreRetention.worst)}`);
+    console.log(`Core rules (3+ comments from 2+ reviewers): ${cuts.coreRetention.coreRules.join("/")} per run; the share of a run's core rules that every other run also has: mean ${f(cuts.coreRetention.mean)}, worst ${f(cuts.coreRetention.worst)}`);
     console.log(`Top ${top}: rules of run 1 found in every other run ${s.inAllRuns}/${s.ruleCounts[0]}, in at least half ${s.inMajority}/${s.ruleCounts[0]}`);
     if (s.unstableStrong.length > 0) {
       console.log(`Rules with 3+ comments that appear in fewer than 2 runs (${s.unstableStrong.length}):`);
@@ -215,7 +237,9 @@ async function main(): Promise<void> {
 
     const { rules } = await readRulesFile(values.rules ?? DEFAULT_RULES_FILE);
     const diffText = values.diff ? await readFile(values.diff, "utf8") : await fetchPullDiff(repo!, prNumber, { token });
-    const files = parseDiff(diffText);
+    const diffMask = redactor();
+    const files = parseDiff(diffText).map((f) => ({ ...f, patch: diffMask.text(f.patch) }));
+    diffMask.report();
     const target = values.diff ? values.diff : `${repo}#${prNumber}`;
     console.log(`Reviewing ${files.length} changed files of ${target} against ${rules.length} rules.`);
 
