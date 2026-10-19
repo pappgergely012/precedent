@@ -32,6 +32,7 @@ if (command === "mine" && repo) {
   const rules = await extractRules(comments, anthropicLlm(), {
     maxComments: intFlag("max-comments", 1000),
     minOccurrences: intFlag("min-occurrences", 2),
+    onProgress: (message) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${message}`),
   });
   if (rules.length === 0) {
     console.log("No recurring rules found.");

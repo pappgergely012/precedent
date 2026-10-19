@@ -10,6 +10,8 @@ export interface ExtractOptions {
   maxComments?: number;
   /** A rule needs at least this many source comments. */
   minOccurrences?: number;
+  /** Called with a human-readable status line as the work advances. */
+  onProgress?: (message: string) => void;
 }
 
 const MIN_BODY_LENGTH = 25;
@@ -72,16 +74,21 @@ ${lines}`;
 async function mergeCandidates(
   candidates: { id: number; principle: string }[],
   llm: Llm,
+  onProgress: (message: string) => void = () => {},
 ): Promise<MergedRule[]> {
   // First level: ids are real comment ids.
   let rules: MergedRule[] = [];
   let fitsOneCall = candidates.length <= MERGE_BATCH_SIZE;
+  const firstChunks = Math.ceil(candidates.length / MERGE_BATCH_SIZE);
   for (let i = 0; i < candidates.length; i += MERGE_BATCH_SIZE) {
     const chunk = candidates.slice(i, i + MERGE_BATCH_SIZE);
     rules.push(...(await llm.parse(mergePrompt(chunk), MergedSchema)).rules);
+    onProgress(`Merge level 1: chunk ${i / MERGE_BATCH_SIZE + 1}/${firstChunks} done, ${rules.length} rules so far`);
   }
+  let level = 1;
   // Higher levels: each rule is a candidate identified by its index in its chunk.
   while (!fitsOneCall) {
+    level++;
     fitsOneCall = rules.length <= MERGE_BATCH_SIZE;
     const sorted = [...rules].sort((a, b) => a.description.localeCompare(b.description));
     const next: MergedRule[] = [];
@@ -101,6 +108,7 @@ async function mergeCandidates(
         });
       }
     }
+    onProgress(`Merge level ${level}: ${rules.length} -> ${next.length} rules`);
     // Stop when merging no longer shrinks the list, to avoid looping forever.
     if (next.length >= rules.length) fitsOneCall = true;
     rules = next;
@@ -116,6 +124,7 @@ export async function extractRules(
 ): Promise<Rule[]> {
   const { batchSize = 40, maxComments = 200, minOccurrences = 2 } = opts;
 
+  const log = opts.onProgress ?? (() => {});
   const usable = filterComments(comments)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, maxComments);
@@ -123,15 +132,20 @@ export async function extractRules(
   const byId = new Map(usable.map((c) => [c.id, c]));
 
   const candidates: { id: number; principle: string }[] = [];
+  const batches = Math.ceil(usable.length / batchSize);
+  log(`Analysing ${usable.length} of ${comments.length} comments in ${batches} batches`);
   for (let i = 0; i < usable.length; i += batchSize) {
     const out = await llm.parse(principlesPrompt(usable.slice(i, i + batchSize)), PrinciplesSchema);
     for (const item of out.items) {
       if (item.principle && byId.has(item.id)) candidates.push({ id: item.id, principle: item.principle });
     }
+    log(`Batch ${i / batchSize + 1}/${batches} done, ${candidates.length} candidate rules so far`);
   }
   if (candidates.length === 0) return [];
 
-  const merged = await mergeCandidates(candidates, llm);
+  log(`Merging ${candidates.length} candidate rules`);
+  const merged = await mergeCandidates(candidates, llm, log);
+  log(`Merged into ${merged.length} rules`);
 
   const rules: Rule[] = [];
   merged.forEach((m, index) => {
