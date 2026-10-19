@@ -12,8 +12,15 @@ export interface ExtractOptions {
   minOccurrences?: number;
   /** ...from at least this many distinct pull requests (one PR's style nits are not a team rule). */
   minPullRequests?: number;
-  /** Ignore comments older than this many days: conventions drift and old reviews mislead. */
+  /** Prefer comments newer than this many days: conventions drift and old reviews mislead. */
   maxAgeDays?: number;
+  /**
+   * The age cutoff never leaves fewer than this many usable comments: slow, long-lived repos
+   * would otherwise lose the evidence for conventions that are still in force.
+   */
+  minRecentComments?: number;
+  /** Extraction batches sent to the model at the same time. */
+  concurrency?: number;
   /** Current time, injectable for tests. */
   now?: Date;
   /** Called with a human-readable status line as the work advances. */
@@ -22,8 +29,9 @@ export interface ExtractOptions {
 
 const MIN_BODY_LENGTH = 25;
 const DEFAULT_MAX_AGE_DAYS = 730;
+const DEFAULT_MIN_RECENT_COMMENTS = 300;
 /** Confidence is scaled by this when every source comment comes from one reviewer. */
-const SINGLE_REVIEWER_FACTOR = 0.75;
+const SINGLE_REVIEWER_FACTOR = 0.5;
 /** Candidates merged per model call; larger inputs overflow the output limit. */
 const MERGE_BATCH_SIZE = 150;
 
@@ -96,7 +104,7 @@ ${lines}`;
  * in chunks, and the resulting rules are merged again until they fit in a single
  * call, so duplicates across chunks still collapse.
  */
-async function mergeCandidates(
+export async function mergeCandidates(
   candidates: { id: number; principle: string }[],
   llm: Llm,
   onProgress: (message: string) => void = () => {},
@@ -123,15 +131,23 @@ async function mergeCandidates(
         mergePrompt(chunk.map((r, index) => ({ id: index, principle: r.description }))),
         MergedSchema,
       );
+      const grouped = new Set<number>();
       for (const m of out.rules) {
-        const parts = [...new Set(m.commentIds)].flatMap((index) => (chunk[index] ? [chunk[index]] : []));
+        const indices = [...new Set(m.commentIds)].filter((index) => chunk[index] && !grouped.has(index));
+        const parts = indices.map((index) => chunk[index]!);
         if (parts.length === 0) continue;
+        indices.forEach((index) => grouped.add(index));
         next.push({
           description: m.description,
           scope: m.scope.length ? m.scope : [...new Set(parts.flatMap((r) => r.scope))],
           commentIds: parts.flatMap((r) => r.commentIds),
         });
       }
+      // The prompt only asks for groups, so a rule with no partner in this chunk is not in
+      // the answer. It is still a rule with its own evidence: carry it through unchanged.
+      chunk.forEach((r, index) => {
+        if (!grouped.has(index)) next.push(r);
+      });
     }
     onProgress(`Merge level ${level}: ${rules.length} -> ${next.length} rules`);
     // Stop when merging no longer shrinks the list, to avoid looping forever.
@@ -315,36 +331,108 @@ export function mergeSharedSources(rules: Rule[], threshold = 0.5): Rule[] {
   return rankRules(kept);
 }
 
+/** What happened on the way to the result, so an empty result can say why. */
+interface RunStats {
+  fetched: number;
+  usable: number;
+  skippedStale: number;
+  keptDespiteAge: number;
+  candidates: number;
+  merged: number;
+  droppedByThreshold: number;
+  droppedByAudit: number;
+}
+
+/** Run `task` over `items` with at most `limit` in flight; results keep the input order. */
+async function mapPool<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await task(items[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** Why no rules came out, and what to try. */
+function emptyResultHint(stats: RunStats, opts: { maxAgeDays: number; minOccurrences: number; minPullRequests: number }): string {
+  if (stats.usable === 0) {
+    return stats.fetched === 0
+      ? "No review comments were found. The repository may have no reviewed pull requests, or the token cannot see them."
+      : `None of the ${stats.fetched} fetched comments is a usable top-level review comment (the rest are replies, short, by the PR author or older than ${opts.maxAgeDays} days). Try --max-age-days ${opts.maxAgeDays * 5}.`;
+  }
+  if (stats.candidates === 0) {
+    return `${stats.usable} comments were analysed but none states a general, project-specific rule. This repository's reviews may be mostly one-off remarks.`;
+  }
+  if (stats.merged === 0 || stats.droppedByThreshold >= stats.merged) {
+    return `${stats.candidates} candidate rules were found but none recurs in ${opts.minOccurrences}+ comments from ${opts.minPullRequests}+ pull requests. Try --min-occurrences 1 to see single-comment candidates, or analyse more history with --max-comments.`;
+  }
+  return `${stats.merged} merged rules were found but the audit judged none supported by the comments it cites.`;
+}
+
 /** Turn review comments into rules, citing the comments each rule came from. */
 export async function extractRules(
   comments: ReviewComment[],
   llm: Llm,
   opts: ExtractOptions = {},
 ): Promise<Rule[]> {
+  const stats: RunStats = { fetched: comments.length, usable: 0, skippedStale: 0, keptDespiteAge: 0, candidates: 0, merged: 0, droppedByThreshold: 0, droppedByAudit: 0 };
+  const rules = await mineRules(comments, llm, opts, stats);
+  if (rules.length === 0) {
+    (opts.onProgress ?? (() => {}))(
+      `Hint: ${emptyResultHint(stats, {
+        maxAgeDays: opts.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS,
+        minOccurrences: opts.minOccurrences ?? 2,
+        minPullRequests: opts.minPullRequests ?? 2,
+      })}`,
+    );
+  }
+  return rules;
+}
+
+async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptions, stats: RunStats): Promise<Rule[]> {
   const { batchSize = 40, maxComments = 600, minOccurrences = 2, minPullRequests = 2 } = opts;
   const maxAgeDays = opts.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS;
+  const minRecent = opts.minRecentComments ?? DEFAULT_MIN_RECENT_COMMENTS;
+  const concurrency = opts.concurrency ?? 4;
 
   const log = opts.onProgress ?? (() => {});
   const cutoff = new Date((opts.now ?? new Date()).getTime() - maxAgeDays * 86_400_000).toISOString();
-  const recent = filterComments(comments).filter((c) => c.createdAt >= cutoff);
-  const stale = filterComments(comments).length - recent.length;
-  if (stale > 0) log(`Skipped ${stale} comments older than ${maxAgeDays} days`);
-  const usable = recent
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, maxComments);
+  const all = filterComments(comments).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const withinAge = all.filter((c) => c.createdAt >= cutoff);
+  // Old comments only count when too little recent evidence is left: a quiet repository's
+  // conventions are still in force even if its latest review is a year old.
+  const kept = withinAge.length >= minRecent ? withinAge : all.slice(0, Math.min(all.length, minRecent));
+  stats.skippedStale = all.length - kept.length;
+  stats.keptDespiteAge = kept.length - withinAge.length;
+  if (stats.skippedStale > 0) log(`Skipped ${stats.skippedStale} comments older than ${maxAgeDays} days`);
+  if (stats.keptDespiteAge > 0) {
+    log(`Only ${withinAge.length} comments are newer than ${maxAgeDays} days; keeping the ${kept.length} newest so the history is not too thin`);
+  }
+  const usable = kept.slice(0, maxComments);
+  stats.usable = usable.length;
   if (usable.length === 0) return [];
   const byId = new Map(usable.map((c) => [c.id, c]));
 
+  const batchList = Array.from({ length: Math.ceil(usable.length / batchSize) }, (_, i) => usable.slice(i * batchSize, (i + 1) * batchSize));
+  log(`Analysing ${usable.length} of ${comments.length} comments in ${batchList.length} batches`);
+  let done = 0;
+  const outputs = await mapPool(batchList, concurrency, async (batch) => {
+    const out = await llm.parse(principlesPrompt(batch), PrinciplesSchema);
+    log(`Batch ${++done}/${batchList.length} done`);
+    return out;
+  });
   const candidates: { id: number; principle: string }[] = [];
-  const batches = Math.ceil(usable.length / batchSize);
-  log(`Analysing ${usable.length} of ${comments.length} comments in ${batches} batches`);
-  for (let i = 0; i < usable.length; i += batchSize) {
-    const out = await llm.parse(principlesPrompt(usable.slice(i, i + batchSize)), PrinciplesSchema);
+  for (const out of outputs) {
     for (const item of out.items) {
       if (item.principle && byId.has(item.id)) candidates.push({ id: item.id, principle: item.principle });
     }
-    log(`Batch ${i / batchSize + 1}/${batches} done, ${candidates.length} candidate rules so far`);
   }
+  stats.candidates = candidates.length;
+  log(`${candidates.length} candidate rules found`);
   if (process.env.PRECEDENT_DEBUG) console.error(`[debug] ${usable.length} usable comments, ${candidates.length} candidate principles`);
   if (candidates.length === 0) return [];
 
@@ -352,6 +440,7 @@ export async function extractRules(
   candidates.sort((a, b) => a.id - b.id);
   log(`Merging ${candidates.length} candidate rules`);
   const merged = await mergeCandidates(candidates, llm, log);
+  stats.merged = merged.length;
   log(`Merged into ${merged.length} rules`);
 
   if (process.env.PRECEDENT_DEBUG) {
@@ -381,6 +470,7 @@ export async function extractRules(
       sources,
     });
   });
+  stats.droppedByThreshold = tooFewComments + tooFewPrs;
   log(
     `Kept ${rules.length} of ${merged.length} merged rules; dropped ${tooFewComments} with fewer than ${minOccurrences} comments and ${tooFewPrs} with fewer than ${minPullRequests} distinct pull requests`,
   );
@@ -388,6 +478,7 @@ export async function extractRules(
 
   log(`Auditing ${rules.length} rules against the comments they cite`);
   const audited = await auditSupport(rules, byId, llm, { minOccurrences, minPullRequests });
+  stats.droppedByAudit = audited.dropped;
   if (audited.dropped > 0) log(`Dropped ${audited.dropped} rules whose comments do not support them`);
   if (audited.rules.length < 2) return audited.rules;
 
