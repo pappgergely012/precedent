@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractDocRules, fetchGuideDocs, isPointer, quoteInText, reconcileRules, selectGuidePaths, wordOverlap, type DocRule } from "./docs.js";
+import { extractDocRules, fetchGuideDocs, isPointer, proposePairs, quoteInText, reconcileRules, selectGuidePaths, wordOverlap, type DocRule } from "./docs.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -230,5 +230,38 @@ describe("regression fixture", () => {
       expect(c.rule.length).toBeGreaterThan(10);
       expect(isPointer(c.quote)).toBe(false);
     }
+  });
+});
+
+describe("proposePairs", () => {
+  const rule = (id: string, description: string): Rule => ({
+    id,
+    description,
+    scope: [],
+    confidence: 0.6,
+    sources: [{ prNumber: 1, reviewer: "anna", commentUrl: "https://github.com/o/r/pull/1#discussion_r1" }],
+  });
+  const doc = (description: string, quote: string): DocRule => ({ description, path: "CONTRIBUTING.md", quote });
+
+  it("is a pure function of the texts and proposes in both directions", () => {
+    const rules = [rule("a", "Mark deprecated code with a RemovedInDjangoXXWarning comment."), rule("b", "Avoid the bare word note in documentation."), rule("c", "Use gate() in tests.")];
+    const docs = [
+      doc("Raise a RemovedInDjangoXXXXWarning when a deprecated feature is invoked", "should raise a RemovedInDjangoXXXXWarning"),
+      doc("Use an admonition with a descriptive title instead of the note directive", "use ``.. admonition:: Descriptive title`` rather than ``.. note::``"),
+      doc("Sign commits", "All commits must be signed."),
+    ];
+    const first = proposePairs(rules, docs);
+    expect(proposePairs(rules, docs)).toEqual(first);
+    const pairs = first.map((p) => `${p.ruleIndex}:${p.docIndex}`);
+    expect(pairs).toContain("0:0"); // placeholder letters XX / XXXX do not hide the shared identifier
+    expect(pairs).toContain("1:1"); // the distinctive word "note" links the two
+    expect(pairs).not.toContain("2:2"); // nothing in common
+  });
+
+  it("proposes from the guide side too, so a guide rule always gets its closest mined rules", () => {
+    const rules = [rule("a", "Wrap docstrings at 79 columns."), rule("b", "Add a regression test for each bug fix."), rule("c", "Name hooks with a use prefix.")];
+    const docs = [doc("Every bug fix needs a regression test", "A good fix should also include a regression test.")];
+    const pairs = proposePairs(rules, docs).map((p) => `${p.ruleIndex}:${p.docIndex}`);
+    expect(pairs).toContain("1:0");
   });
 });

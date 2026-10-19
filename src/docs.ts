@@ -235,14 +235,20 @@ export interface Reconciled {
 
 const STOP = new Set(["a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "when", "with", "that", "is", "are", "be", "not", "do", "does", "it", "its", "as", "at", "by", "from", "this", "than", "instead", "rather", "should", "must", "always", "never", "use", "add", "each", "every", "new"]);
 
-/** Lower-cased content words with a crude plural/-ing stem, so "tests" and "test" meet. */
+/**
+ * Lower-cased content words with a crude plural/-ing stem, so "tests" and "test" meet. Identifiers
+ * are split at camelCase boundaries and runs of one letter are shortened ("XXXX" and "XX" are the
+ * same placeholder), so RemovedInDjangoXXWarning and RemovedInDjangoXXXXWarning share their words.
+ */
 const words = (text: string): Set<string> =>
   new Set(
     text
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
       .toLowerCase()
       .split(/[^a-z0-9_]+/)
-      .filter((t) => t.length > 2 && !STOP.has(t))
-      .map((t) => t.replace(/(ing|es|s)$/, "")),
+      .map((t) => t.replace(/(.)\1{2,}/g, "$1$1"))
+      .filter((t) => t.length > 1 && !STOP.has(t))
+      .map((t) => (t.length > 3 ? t.replace(/(ing|es|s)$/, "") : t)),
   );
 
 /** Shared content words as a share of the shorter text, and how many there are. */
@@ -254,19 +260,64 @@ export function wordOverlap(a: string, b: string): { share: number; shared: numb
   return { share: shared / Math.max(1, Math.min(wa.size, wb.size)), shared };
 }
 
-const CANDIDATES_PER_RULE = 3;
+const CANDIDATES_PER_SIDE = 3;
 const VERIFY_BATCH = 40;
 /** A documented rule this close in wording to a mined rule is the same rule, whatever the second look said. */
 const NEAR_IDENTICAL = { share: 0.7, shared: 3 };
+/** The weakest lexical similarity worth sending to the strict second look. */
+const MIN_PROPOSAL_SCORE = 0.15;
 
-/** The documented rules whose wording is closest to a mined rule: proposals for the strict second look. */
-function retrieve(rule: Rule, docRules: DocRule[]): number[] {
-  return docRules
-    .map((d, i) => ({ i, ...wordOverlap(rule.description, `${d.description} ${d.quote}`) }))
-    .filter((c) => c.shared >= 2 && c.share >= 0.3)
-    .sort((x, y) => y.share - x.share || y.shared - x.shared || x.i - y.i)
-    .slice(0, CANDIDATES_PER_RULE)
-    .map((c) => c.i);
+/** Inverse document frequency over a set of texts: words that few texts use say more about a pair. */
+function idfOf(texts: string[]): (word: string) => number {
+  const df = new Map<string, number>();
+  for (const t of texts) for (const w of words(t)) df.set(w, (df.get(w) ?? 0) + 1);
+  return (w) => Math.log(1 + texts.length / (df.get(w) ?? 1));
+}
+
+/** Weight of the words two texts share, as a share of the lighter text's total weight. */
+function weightedOverlap(a: Set<string>, b: Set<string>, idf: (w: string) => number): number {
+  let shared = 0;
+  let wa = 0;
+  let wb = 0;
+  for (const w of a) wa += idf(w);
+  for (const w of b) wb += idf(w);
+  for (const w of a) if (b.has(w)) shared += idf(w);
+  const base = Math.min(wa, wb);
+  return base === 0 ? 0 : shared / base;
+}
+
+/**
+ * Pairs worth a strict second look, a pure function of the texts: for every mined rule its closest
+ * guide rules and for every guide rule its closest mined rules (lexical, weighted towards
+ * distinctive words), so the proposals do not depend on what the model happens to suggest.
+ */
+export function proposePairs(rules: Rule[], docRules: DocRule[]): { ruleIndex: number; docIndex: number }[] {
+  const ruleTexts = rules.map((r) => r.description);
+  const docTexts = docRules.map((d) => `${d.description} ${d.quote}`);
+  const idf = idfOf([...ruleTexts, ...docTexts]);
+  const ruleWords = ruleTexts.map(words);
+  const docWords = docTexts.map(words);
+  const score = (i: number, j: number) => weightedOverlap(ruleWords[i]!, docWords[j]!, idf);
+
+  const out = new Map<string, { ruleIndex: number; docIndex: number }>();
+  const add = (ruleIndex: number, docIndex: number) => out.set(`${ruleIndex}:${docIndex}`, { ruleIndex, docIndex });
+  rules.forEach((_, i) => {
+    docRules
+      .map((_d, j) => ({ j, s: score(i, j) }))
+      .filter((c) => c.s >= MIN_PROPOSAL_SCORE)
+      .sort((x, y) => y.s - x.s || x.j - y.j)
+      .slice(0, CANDIDATES_PER_SIDE)
+      .forEach((c) => add(i, c.j));
+  });
+  docRules.forEach((_, j) => {
+    rules
+      .map((_r, i) => ({ i, s: score(i, j) }))
+      .filter((c) => c.s >= MIN_PROPOSAL_SCORE)
+      .sort((x, y) => y.s - x.s || x.i - y.i)
+      .slice(0, CANDIDATES_PER_SIDE)
+      .forEach((c) => add(c.i, j));
+  });
+  return [...out.values()].sort((a, b) => a.ruleIndex - b.ruleIndex || a.docIndex - b.docIndex);
 }
 
 type Verdict = "same" | "conflict" | "no";
@@ -310,7 +361,7 @@ export async function reconcileRules(rules: Rule[], docRules: DocRule[], llm: Ll
     if (rules[ruleIndex] && docRules[docIndex]) proposals.set(`${ruleIndex}:${docIndex}`, { ruleIndex, docIndex });
   };
   for (const m of matches) propose(m.ruleIndex, m.docIndex);
-  rules.forEach((rule, ruleIndex) => retrieve(rule, docRules).forEach((docIndex) => propose(ruleIndex, docIndex)));
+  for (const p of proposePairs(rules, docRules)) propose(p.ruleIndex, p.docIndex);
 
   // Second look at every proposed pair with only the two texts in view. Anything not confirmed
   // is treated as enforced. A conflict is a serious claim, so it must be confirmed twice.
