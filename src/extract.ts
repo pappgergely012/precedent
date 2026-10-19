@@ -1,3 +1,4 @@
+import { dropReason } from "./rulefilter.js";
 import { z } from "zod";
 import type { ReviewComment } from "./github.js";
 import type { PrincipleCache } from "./cache.js";
@@ -561,6 +562,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   const rules: Rule[] = [];
   let tooFewComments = 0;
   let tooFewPrs = 0;
+  let droppedByFilter = 0;
   merged.forEach((m, index) => {
     const sources = [...new Set(m.commentIds)].flatMap((id) => {
       const c = byId.get(id);
@@ -572,6 +574,11 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
     }
     if (new Set(sources.map((s) => s.prNumber)).size < minPullRequests) {
       tooFewPrs++;
+      return;
+    }
+    const reason = dropReason(m);
+    if (reason) {
+      droppedByFilter++;
       return;
     }
     rules.push({
@@ -586,6 +593,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   log(
     `Kept ${rules.length} of ${merged.length} merged rules; dropped ${tooFewComments} with fewer than ${minOccurrences} comments and ${tooFewPrs} with fewer than ${minPullRequests} distinct pull requests`,
   );
+  if (droppedByFilter > 0) log(`Dropped ${droppedByFilter} rules that are not in English or are about tool-generated files`);
   if (rules.length === 0) return rules;
 
   log(`Auditing ${rules.length} rules against the comments they cite`);
