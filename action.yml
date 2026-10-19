@@ -1,0 +1,74 @@
+name: Precedent
+description: Review pull requests against the rules your team has asked for in past reviews.
+author: Precedent
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  mode:
+    description: "`review` checks the pull request against the rules file. `mine` mines review comments and writes the rules file."
+    default: review
+  anthropic-api-key:
+    description: "Anthropic API key. Pass it from a repository secret."
+    required: false
+  github-token:
+    description: "Token used to read review comments and pull requests, and to post the review. Needs `pull-requests: write` to post."
+    default: ${{ github.token }}
+  rules-file:
+    description: "Path of the rules file, relative to the repository root."
+    default: .precedent/rules.json
+  post:
+    description: "In review mode, post the findings as a pull request review. Set to `false` for a dry run that only prints them."
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Install Precedent
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm install --global pnpm@10
+        pnpm install --frozen-lockfile
+        pnpm build
+
+    - name: Run Precedent
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        RULES_FILE: ${{ inputs.rules-file }}
+        POST: ${{ inputs.post }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PRECEDENT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set -euo pipefail
+        if [ -z "${PRECEDENT_ANTHROPIC_API_KEY}" ]; then
+          echo "::notice::No Anthropic API key available (secrets are not passed to pull requests from forks); skipping."
+          exit 0
+        fi
+        cli="$GITHUB_ACTION_PATH/dist/cli.js"
+        case "$MODE" in
+          review)
+            if [ -z "${PR_NUMBER}" ]; then
+              echo "::error::review mode needs a pull_request event."
+              exit 1
+            fi
+            args=(review "$REPO" "$PR_NUMBER" --rules "$RULES_FILE")
+            if [ "$POST" = "true" ]; then args+=(--post); fi
+            node "$cli" "${args[@]}"
+            ;;
+          mine)
+            node "$cli" mine "$REPO" --out "$RULES_FILE"
+            ;;
+          *)
+            echo "::error::Unknown mode '$MODE'. Use 'review' or 'mine'."
+            exit 1
+            ;;
+        esac
