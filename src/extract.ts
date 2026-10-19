@@ -12,11 +12,18 @@ export interface ExtractOptions {
   minOccurrences?: number;
   /** ...from at least this many distinct pull requests (one PR's style nits are not a team rule). */
   minPullRequests?: number;
+  /** Ignore comments older than this many days: conventions drift and old reviews mislead. */
+  maxAgeDays?: number;
+  /** Current time, injectable for tests. */
+  now?: Date;
   /** Called with a human-readable status line as the work advances. */
   onProgress?: (message: string) => void;
 }
 
 const MIN_BODY_LENGTH = 25;
+const DEFAULT_MAX_AGE_DAYS = 730;
+/** Confidence is scaled by this when every source comment comes from one reviewer. */
+const SINGLE_REVIEWER_FACTOR = 0.75;
 /** Candidates merged per model call; larger inputs overflow the output limit. */
 const MERGE_BATCH_SIZE = 150;
 
@@ -120,6 +127,72 @@ async function mergeCandidates(
   return rules;
 }
 
+const DedupeSchema = z.object({
+  groups: z.array(z.array(z.number())),
+});
+
+function dedupePrompt(rules: Rule[]): string {
+  const lines = rules.map((r, i) => `[${i}] ${r.description}`).join("\n");
+  return `Below are coding rules mined from a team's code reviews. Some state the same obligation in different words, or one is a narrower case of another.
+
+Return groups of indices that should be merged into a single rule. Only group rules that a reviewer would treat as the same request; rules about different situations or different obligations must stay separate. Omit rules that have no duplicate. Do not reuse an index in more than one group.
+
+${lines}`;
+}
+
+/** Merge rules that restate the same obligation, pooling their sources. */
+export async function dedupeRules(rules: Rule[], llm: Llm): Promise<Rule[]> {
+  if (rules.length < 2) return rules;
+  const { groups } = await llm.parse(dedupePrompt(rules), DedupeSchema);
+
+  const used = new Set<number>();
+  const absorbed = new Set<number>();
+  const result: Rule[] = [];
+  for (const group of groups) {
+    const members = [...new Set(group)].filter((i) => rules[i] && !used.has(i));
+    if (members.length < 2) continue;
+    members.forEach((i) => used.add(i));
+    // The rule with the most distinct PRs speaks for the group.
+    const [lead, ...rest] = members.map((i) => rules[i]!).sort((a, b) => prCount(b) - prCount(a));
+    const sources = new Map(lead!.sources.map((x) => [x.commentUrl, x]));
+    for (const r of rest) for (const x of r.sources) sources.set(x.commentUrl, x);
+    const merged = [...sources.values()];
+    result.push({
+      ...lead!,
+      scope: [...new Set([lead!, ...rest].flatMap((r) => r.scope))],
+      sources: merged,
+      confidence: confidenceFor(merged),
+    });
+    members.forEach((i) => absorbed.add(i));
+  }
+  rules.forEach((r, i) => {
+    if (!absorbed.has(i)) result.push(r);
+  });
+  return rankRules(result);
+}
+
+const prCount = (r: Rule) => new Set(r.sources.map((s) => s.prNumber)).size;
+const reviewerCount = (r: Rule) => new Set(r.sources.map((s) => s.reviewer)).size;
+
+/** Distinct PRs / 5, reduced when only one reviewer ever asked for it. */
+function confidenceFor(sources: Rule["sources"]): number {
+  const base = Math.min(1, new Set(sources.map((s) => s.prNumber)).size / 5);
+  return new Set(sources.map((s) => s.reviewer)).size < 2 ? base * SINGLE_REVIEWER_FACTOR : base;
+}
+
+function rankRules(rules: Rule[]): Rule[] {
+  return [...rules].sort(
+    (a, b) =>
+      b.confidence - a.confidence ||
+      prCount(b) - prCount(a) ||
+      reviewerCount(b) - reviewerCount(a) ||
+      b.sources.length - a.sources.length,
+  );
+}
+
+/** True when a rule rests on a single reviewer's taste rather than team consensus. */
+export const isSingleReviewer = (r: Rule): boolean => reviewerCount(r) < 2;
+
 /** Turn review comments into rules, citing the comments each rule came from. */
 export async function extractRules(
   comments: ReviewComment[],
@@ -127,9 +200,14 @@ export async function extractRules(
   opts: ExtractOptions = {},
 ): Promise<Rule[]> {
   const { batchSize = 40, maxComments = 600, minOccurrences = 2, minPullRequests = 2 } = opts;
+  const maxAgeDays = opts.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS;
 
   const log = opts.onProgress ?? (() => {});
-  const usable = filterComments(comments)
+  const cutoff = new Date((opts.now ?? new Date()).getTime() - maxAgeDays * 86_400_000).toISOString();
+  const recent = filterComments(comments).filter((c) => c.createdAt >= cutoff);
+  const stale = filterComments(comments).length - recent.length;
+  if (stale > 0) log(`Skipped ${stale} comments older than ${maxAgeDays} days`);
+  const usable = recent
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, maxComments);
   if (usable.length === 0) return [];
@@ -148,6 +226,8 @@ export async function extractRules(
   if (process.env.PRECEDENT_DEBUG) console.error(`[debug] ${usable.length} usable comments, ${candidates.length} candidate principles`);
   if (candidates.length === 0) return [];
 
+  // Stable input order keeps chunking identical between runs of the same data.
+  candidates.sort((a, b) => a.id - b.id);
   log(`Merging ${candidates.length} candidate rules`);
   const merged = await mergeCandidates(candidates, llm, log);
   log(`Merged into ${merged.length} rules`);
@@ -156,22 +236,34 @@ export async function extractRules(
     console.error(`[debug] merge returned ${merged.length} rules; sizes: ${merged.map((m) => m.commentIds.length).join(",")}`);
   }
   const rules: Rule[] = [];
+  let tooFewComments = 0;
+  let tooFewPrs = 0;
   merged.forEach((m, index) => {
     const sources = [...new Set(m.commentIds)].flatMap((id) => {
       const c = byId.get(id);
       return c ? [{ prNumber: c.prNumber, commentUrl: c.url, reviewer: c.reviewer }] : [];
     });
-    if (sources.length < minOccurrences) return;
-    const distinctPrs = new Set(sources.map((s) => s.prNumber)).size;
-    if (distinctPrs < minPullRequests) return;
+    if (sources.length < minOccurrences) {
+      tooFewComments++;
+      return;
+    }
+    if (new Set(sources.map((s) => s.prNumber)).size < minPullRequests) {
+      tooFewPrs++;
+      return;
+    }
     rules.push({
       id: `rule-${index + 1}`,
       description: m.description,
       scope: m.scope,
-      confidence: Math.min(1, distinctPrs / 5),
+      confidence: confidenceFor(sources),
       sources,
     });
   });
-  const prCount = (r: Rule) => new Set(r.sources.map((s) => s.prNumber)).size;
-  return rules.sort((a, b) => prCount(b) - prCount(a) || b.sources.length - a.sources.length);
+  log(
+    `Kept ${rules.length} of ${merged.length} merged rules; dropped ${tooFewComments} with fewer than ${minOccurrences} comments and ${tooFewPrs} with fewer than ${minPullRequests} distinct pull requests`,
+  );
+  if (rules.length < 2) return rules;
+  const deduped = await dedupeRules(rules, llm);
+  if (deduped.length < rules.length) log(`Merged ${rules.length - deduped.length} near-duplicate rules`);
+  return deduped;
 }
