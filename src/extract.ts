@@ -214,27 +214,13 @@ function confidenceFor(sources: Rule["sources"]): number {
   return new Set(sources.map((s) => s.reviewer)).size < 2 ? base * SINGLE_REVIEWER_FACTOR : base;
 }
 
-/** Ids of the comments a rule cites; comment ids grow with time, so they also order evidence by age. */
-const citedIds = (r: Rule): number[] => r.sources.flatMap((s) => idOfUrl(s.commentUrl) ?? []);
-
-/**
- * Best rules first, ordered by evidence only: confidence, distinct pull requests, distinct
- * reviewers, number of comments, then the newest cited comment, then the oldest. Nothing here
- * depends on how the model worded a rule, so the same evidence always ranks the same way and a
- * top-N cut through a group of equally supported rules does not shuffle with the wording.
- */
-export function rankRules(rules: Rule[]): Rule[] {
-  const newest = (r: Rule) => Math.max(0, ...citedIds(r));
-  const oldest = (r: Rule) => Math.min(Infinity, ...citedIds(r));
+function rankRules(rules: Rule[]): Rule[] {
   return [...rules].sort(
     (a, b) =>
       b.confidence - a.confidence ||
       prCount(b) - prCount(a) ||
       reviewerCount(b) - reviewerCount(a) ||
-      b.sources.length - a.sources.length ||
-      newest(b) - newest(a) ||
-      oldest(a) - oldest(b) ||
-      a.description.localeCompare(b.description),
+      b.sources.length - a.sources.length,
   );
 }
 
