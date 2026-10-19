@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
+import { extractDocRules, fetchGuideDocs, isPointer, reconcileRules, type DocRule } from "./docs.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -36,11 +36,12 @@ describe("extractDocRules", () => {
     ]);
   });
 
-  it("drops rules with an invented or empty quote", async () => {
+  it("drops rules with an invented, empty or pointer-only quote", async () => {
     const llm = fakeLlm({ rules: [
       { description: "Sign commits", quote: "All commits must be signed." },
       { description: "Empty", quote: "  " },
       { description: "Run tests", quote: "Run `pnpm test` before pushing." },
+      { description: "Pointer", quote: "Run `pnpm test`" },
     ] });
     expect((await extractDocRules([doc], llm)).map((r) => r.description)).toEqual(["Run tests"]);
   });
@@ -65,7 +66,7 @@ describe("reconcileRules", () => {
     const llm = fakeLlm({ matches: [
       { ruleIndex: 0, docIndex: 0, relation: "same" },
       { ruleIndex: 1, docIndex: 1, relation: "conflict" },
-    ] });
+    ] }, { verdicts: [{ pair: 0, verdict: "same" }, { pair: 1, verdict: "conflict" }] });
     const out = await reconcileRules(rules, docRules, llm);
     expect(out.rules.map((r) => r.origin)).toEqual(["both", "conflict", "enforced"]);
     expect(out.rules[0]!.docRefs).toEqual([{ path: "CONTRIBUTING.md", quote: "Add a changelog entry." }]);
@@ -79,10 +80,21 @@ describe("reconcileRules", () => {
       { ruleIndex: 0, docIndex: 9, relation: "same" },
       { ruleIndex: 0, docIndex: 0, relation: "same" },
       { ruleIndex: 0, docIndex: 1, relation: "conflict" },
-    ] });
+    ] }, { verdicts: [{ pair: 0, verdict: "same" }] });
     const out = await reconcileRules(rules, docRules, llm);
     expect(out.rules[0]!.origin).toBe("both");
     expect(out.documentedOnly).toHaveLength(2);
+  });
+
+  it("treats a pair the second look does not confirm as enforced, and never calls it documented", async () => {
+    const llm = fakeLlm(
+      { matches: [{ ruleIndex: 0, docIndex: 0, relation: "same" }, { ruleIndex: 1, docIndex: 1, relation: "same" }, { ruleIndex: 2, docIndex: 2, relation: "same" }] },
+      { verdicts: [{ pair: 0, verdict: "no" }, { pair: 1, verdict: "conflict" }] },
+    );
+    const out = await reconcileRules(rules, docRules, llm);
+    // pair 0 rejected, pair 1 downgraded/upgraded to the verified relation, pair 2 got no verdict
+    expect(out.rules.map((r) => r.origin)).toEqual(["enforced", "conflict", "enforced"]);
+    expect(out.documentedOnly.map((d) => d.description)).toEqual(["Add a changelog entry", "Sign commits"]);
   });
 
   it("makes no model call when there is nothing to compare", async () => {
@@ -90,5 +102,18 @@ describe("reconcileRules", () => {
     const out = await reconcileRules(rules, [], llm);
     expect(out.rules.every((r) => r.origin === "enforced")).toBe(true);
     expect(out.documentedOnly).toEqual([]);
+  });
+});
+
+describe("isPointer", () => {
+  it("flags quotes that only point to another document", () => {
+    expect(isPointer("Please read [Contributing to the Rails Documentation](https://edgeguides.rubyonrails.org/x.html) for more.")).toBe(true);
+    expect(isPointer("See the style guide")).toBe(true);
+    expect(isPointer("[Guide](https://example.com)")).toBe(true);
+  });
+
+  it("keeps quotes that state an expectation", () => {
+    expect(isPointer("Add accompanying test case for every bug fix.")).toBe(false);
+    expect(isPointer("Run `pnpm test` before pushing your changes.")).toBe(false);
   });
 });

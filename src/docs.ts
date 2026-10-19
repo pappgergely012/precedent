@@ -58,6 +58,16 @@ export async function fetchGuideDocs(repo: string, opts: DocsOptions = {}): Prom
   return docs;
 }
 
+/**
+ * A quote that only points elsewhere ("Please read the contributing guide", a bare link) states
+ * no rule of its own, however much the linked page might.
+ */
+export function isPointer(quote: string): boolean {
+  const withoutLinks = quote.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, "").trim();
+  if (withoutLinks.split(/\s+/).filter(Boolean).length < 4) return true;
+  return /^(please\s+)?(read|see|refer to|check out|check|visit|have a look at)\b/i.test(withoutLinks);
+}
+
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
 
 const DocRulesSchema = z.object({
@@ -71,7 +81,7 @@ For each rule return:
 - description: one imperative sentence
 - quote: the exact text from the guide that states it, copied verbatim (a sentence or bullet, not a paraphrase)
 
-Skip vague advice ("write clean code"), project history, setup instructions and anything that is not an expectation of contributors.
+Skip vague advice ("write clean code"), project history, setup instructions, pointers to other documents ("please read X", "see Y") and anything that is not an expectation of contributors. The quote itself must contain the expectation.
 
 ${doc.text}`;
 }
@@ -87,7 +97,7 @@ export async function extractDocRules(docs: GuideDoc[], llm: Llm): Promise<DocRu
     const { rules } = await llm.parse(docRulesPrompt(doc), DocRulesSchema);
     for (const r of rules) {
       const quote = r.quote.trim();
-      if (quote && haystack.includes(normalize(quote))) out.push({ description: r.description.trim(), path: doc.path, quote });
+      if (quote && !isPointer(quote) && haystack.includes(normalize(quote))) out.push({ description: r.description.trim(), path: doc.path, quote });
     }
   }
   return out;
@@ -121,6 +131,23 @@ Documented rules:
 ${documented}`;
 }
 
+const VerifySchema = z.object({
+  verdicts: z.array(z.object({ pair: z.number(), verdict: z.enum(["same", "conflict", "no"]) })),
+});
+
+function verifyPrompt(pairs: { ruleText: string; quote: string }[]): string {
+  const blocks = pairs.map((p, i) => `Pair ${i}\nMined rule: ${p.ruleText}\nGuide text: "${p.quote}"`).join("\n\n");
+  return `For each pair, judge ONLY from the guide text shown, read on its own.
+
+- "same": the guide text, by itself, asks contributors to do what the mined rule says (not merely the same topic or area).
+- "conflict": the guide text, by itself, clearly asks for the opposite of the mined rule in the same situation.
+- "no": anything else, including text that only mentions the topic, only points to another document, covers a different situation, or is more general or more specific in a way that changes what is asked.
+
+When unsure, answer "no".
+
+${blocks}`;
+}
+
 export interface Reconciled {
   rules: Rule[];
   /** Documented rules no mined rule corresponds to: written down, but no review evidence. */
@@ -136,6 +163,22 @@ export async function reconcileRules(rules: Rule[], docRules: DocRule[], llm: Ll
   const byRule = new Map<number, { docIndex: number; relation: "same" | "conflict" }>();
   for (const m of matches) {
     if (rules[m.ruleIndex] && docRules[m.docIndex] && !byRule.has(m.ruleIndex)) byRule.set(m.ruleIndex, m);
+  }
+
+  // Second look at every proposed pair, with only the two texts in view: the first pass sees
+  // many rules at once and over-matches on topic. Anything not confirmed is treated as enforced.
+  const proposed = [...byRule.entries()];
+  if (proposed.length > 0) {
+    const verdicts = await llm.parse(
+      verifyPrompt(proposed.map(([ruleIndex, m]) => ({ ruleText: rules[ruleIndex]!.description, quote: docRules[m.docIndex]!.quote }))),
+      VerifySchema,
+    );
+    const verdictOf = new Map(verdicts.verdicts.map((v) => [v.pair, v.verdict]));
+    proposed.forEach(([ruleIndex, m], pair) => {
+      const verdict = verdictOf.get(pair);
+      if (verdict === "same" || verdict === "conflict") byRule.set(ruleIndex, { docIndex: m.docIndex, relation: verdict });
+      else byRule.delete(ruleIndex);
+    });
   }
   const matchedDocs = new Set([...byRule.values()].map((m) => m.docIndex));
   const tagged = rules.map((rule, i): Rule => {
