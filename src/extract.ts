@@ -12,9 +12,13 @@ export interface ExtractOptions {
   minOccurrences?: number;
   /** ...from at least this many distinct pull requests (one PR's style nits are not a team rule). */
   minPullRequests?: number;
+  /** Called with a human-readable status line as the work advances. */
+  onProgress?: (message: string) => void;
 }
 
 const MIN_BODY_LENGTH = 25;
+/** Candidates merged per model call; larger inputs overflow the output limit. */
+const MERGE_BATCH_SIZE = 150;
 
 /** Keep top-level, substantive comments; replies and one-word approvals carry no rule. */
 export function filterComments(comments: ReviewComment[]): ReviewComment[] {
@@ -34,6 +38,8 @@ const MergedSchema = z.object({
     }),
   ),
 });
+
+type MergedRule = z.infer<typeof MergedSchema>["rules"][number];
 
 function principlesPrompt(batch: ReviewComment[]): string {
   const lines = batch
@@ -64,6 +70,56 @@ Only return rules supported by two or more candidates; omit candidates that matc
 ${lines}`;
 }
 
+/**
+ * Merge candidates into rules. Inputs larger than one call can answer are merged
+ * in chunks, and the resulting rules are merged again until they fit in a single
+ * call, so duplicates across chunks still collapse.
+ */
+async function mergeCandidates(
+  candidates: { id: number; principle: string }[],
+  llm: Llm,
+  onProgress: (message: string) => void = () => {},
+): Promise<MergedRule[]> {
+  // First level: ids are real comment ids.
+  let rules: MergedRule[] = [];
+  let fitsOneCall = candidates.length <= MERGE_BATCH_SIZE;
+  const firstChunks = Math.ceil(candidates.length / MERGE_BATCH_SIZE);
+  for (let i = 0; i < candidates.length; i += MERGE_BATCH_SIZE) {
+    const chunk = candidates.slice(i, i + MERGE_BATCH_SIZE);
+    rules.push(...(await llm.parse(mergePrompt(chunk), MergedSchema)).rules);
+    onProgress(`Merge level 1: chunk ${i / MERGE_BATCH_SIZE + 1}/${firstChunks} done, ${rules.length} rules so far`);
+  }
+  let level = 1;
+  // Higher levels: each rule is a candidate identified by its index in its chunk.
+  while (!fitsOneCall) {
+    level++;
+    fitsOneCall = rules.length <= MERGE_BATCH_SIZE;
+    const sorted = [...rules].sort((a, b) => a.description.localeCompare(b.description));
+    const next: MergedRule[] = [];
+    for (let i = 0; i < sorted.length; i += MERGE_BATCH_SIZE) {
+      const chunk = sorted.slice(i, i + MERGE_BATCH_SIZE);
+      const out = await llm.parse(
+        mergePrompt(chunk.map((r, index) => ({ id: index, principle: r.description }))),
+        MergedSchema,
+      );
+      for (const m of out.rules) {
+        const parts = [...new Set(m.commentIds)].flatMap((index) => (chunk[index] ? [chunk[index]] : []));
+        if (parts.length === 0) continue;
+        next.push({
+          description: m.description,
+          scope: m.scope.length ? m.scope : [...new Set(parts.flatMap((r) => r.scope))],
+          commentIds: parts.flatMap((r) => r.commentIds),
+        });
+      }
+    }
+    onProgress(`Merge level ${level}: ${rules.length} -> ${next.length} rules`);
+    // Stop when merging no longer shrinks the list, to avoid looping forever.
+    if (next.length >= rules.length) fitsOneCall = true;
+    rules = next;
+  }
+  return rules;
+}
+
 /** Turn review comments into rules, citing the comments each rule came from. */
 export async function extractRules(
   comments: ReviewComment[],
@@ -72,6 +128,7 @@ export async function extractRules(
 ): Promise<Rule[]> {
   const { batchSize = 40, maxComments = 600, minOccurrences = 2, minPullRequests = 2 } = opts;
 
+  const log = opts.onProgress ?? (() => {});
   const usable = filterComments(comments)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, maxComments);
@@ -79,22 +136,27 @@ export async function extractRules(
   const byId = new Map(usable.map((c) => [c.id, c]));
 
   const candidates: { id: number; principle: string }[] = [];
+  const batches = Math.ceil(usable.length / batchSize);
+  log(`Analysing ${usable.length} of ${comments.length} comments in ${batches} batches`);
   for (let i = 0; i < usable.length; i += batchSize) {
     const out = await llm.parse(principlesPrompt(usable.slice(i, i + batchSize)), PrinciplesSchema);
     for (const item of out.items) {
       if (item.principle && byId.has(item.id)) candidates.push({ id: item.id, principle: item.principle });
     }
+    log(`Batch ${i / batchSize + 1}/${batches} done, ${candidates.length} candidate rules so far`);
   }
   if (process.env.PRECEDENT_DEBUG) console.error(`[debug] ${usable.length} usable comments, ${candidates.length} candidate principles`);
   if (candidates.length === 0) return [];
 
-  const merged = await llm.parse(mergePrompt(candidates), MergedSchema);
+  log(`Merging ${candidates.length} candidate rules`);
+  const merged = await mergeCandidates(candidates, llm, log);
+  log(`Merged into ${merged.length} rules`);
 
   if (process.env.PRECEDENT_DEBUG) {
-    console.error(`[debug] merge returned ${merged.rules.length} rules; sizes: ${merged.rules.map((m) => m.commentIds.length).join(",")}`);
+    console.error(`[debug] merge returned ${merged.length} rules; sizes: ${merged.map((m) => m.commentIds.length).join(",")}`);
   }
   const rules: Rule[] = [];
-  merged.rules.forEach((m, index) => {
+  merged.forEach((m, index) => {
     const sources = [...new Set(m.commentIds)].flatMap((id) => {
       const c = byId.get(id);
       return c ? [{ prNumber: c.prNumber, commentUrl: c.url, reviewer: c.reviewer }] : [];
