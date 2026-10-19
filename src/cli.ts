@@ -7,7 +7,7 @@ import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js"
 import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
-import { fileCache } from "./cache.js";
+import { fileCache, memoryCache } from "./cache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
 import { summarizeStability } from "./stability.js";
@@ -16,7 +16,7 @@ import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 const USAGE = `Usage:
   precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer]
-  precedent stability <owner/repo> [--runs N] [--max-comments N]
+  precedent stability <owner/repo> [--runs N] [--top N] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -31,6 +31,8 @@ const { positionals, values } = parseArgs({
     post: { type: "boolean" },
     verify: { type: "boolean" },
     cache: { type: "string" },
+    top: { type: "string" },
+    "pin-extraction": { type: "boolean" },
     docs: { type: "boolean" },
     "max-pages": { type: "string" },
     runs: { type: "string" },
@@ -158,17 +160,35 @@ async function main(): Promise<void> {
   } else if (command === "stability" && repo) {
     requireAnthropicKey();
     const runs = intFlag("runs", 3);
+    const top = intFlag("top", 10);
     const comments = await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) });
     console.log(`Fetched ${comments.length} review comments once; mining ${runs} times (each run costs about as much as one \`mine\`).`);
+    // With --pin-extraction the per-comment judgements of run 1 are reused, which isolates the
+    // variance of the merge and audit steps from the variance of the extraction step.
+    const pinned = values["pin-extraction"] ? memoryCache() : undefined;
+    const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(comments, anthropicLlm(), { maxComments: intFlag("max-comments", 1000) }));
+      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), cache: pinned }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
-    const s = summarizeStability(results);
-    console.log(`\nRule counts per run: ${s.ruleCounts.join(", ")}`);
-    console.log(`Mean pairwise overlap (Jaccard): ${s.meanOverlap.toFixed(2)}, worst pair: ${s.minOverlap.toFixed(2)}`);
+    const s = summarizeStability(results, top);
+    const f = (n: number) => n.toFixed(2);
+    console.log(`\nTop ${top} per run, ${values["pin-extraction"] ? "extraction pinned after run 1" : "nothing pinned"}.`);
+    console.log(`Rule counts per run: ${s.ruleCounts.join(", ")}`);
+    console.log(`Mean pairwise overlap (rules match on a shared cited comment or near-identical wording): ${f(s.meanOverlap)}, worst pair ${f(s.minOverlap)}`);
+    console.log(`  shared cited comment only: ${f(s.meanCommentOverlap)}   near-identical wording only: ${f(s.meanWordingOverlap)}`);
     console.log(`Rules of run 1 found in every other run: ${s.inAllRuns}/${s.ruleCounts[0]}, in at least half: ${s.inMajority}/${s.ruleCounts[0]}`);
+    if (s.unstableStrong.length > 0) {
+      console.log(`Rules with 3+ comments that appear in fewer than 2 runs (${s.unstableStrong.length}):`);
+      for (const u of s.unstableStrong) console.log(`  - ${u.description} (${u.comments} comments, in ${u.runsPresent} run${u.runsPresent === 1 ? "" : "s"})`);
+    }
+    const usage = llm.usage?.();
+    if (usage) console.log(`Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens.`);
+    if (values.out) {
+      await writeFile(values.out, `${JSON.stringify({ repo, top, pinnedExtraction: !!pinned, runs: results.map((r) => r.slice(0, top)) }, null, 2)}\n`);
+      console.log(`Wrote the ${runs} runs to ${values.out}`);
+    }
   } else if (command === "review" && (values.diff || (repo && prArg))) {
     requireAnthropicKey();
     const token = process.env.GITHUB_TOKEN;
