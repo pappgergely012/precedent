@@ -13,6 +13,8 @@ export interface ExtractOptions {
 }
 
 const MIN_BODY_LENGTH = 25;
+/** Candidates merged per model call; larger inputs overflow the output limit. */
+const MERGE_BATCH_SIZE = 150;
 
 /** Keep top-level, substantive comments; replies and one-word approvals carry no rule. */
 export function filterComments(comments: ReviewComment[]): ReviewComment[] {
@@ -32,6 +34,8 @@ const MergedSchema = z.object({
     }),
   ),
 });
+
+type MergedRule = z.infer<typeof MergedSchema>["rules"][number];
 
 function principlesPrompt(batch: ReviewComment[]): string {
   const lines = batch
@@ -60,6 +64,37 @@ Do not invent rules and do not reuse an id in more than one rule.
 ${lines}`;
 }
 
+/**
+ * Merge candidates into rules. Large inputs are merged in chunks first, then the
+ * partial rules are merged again so duplicates across chunks still collapse.
+ */
+async function mergeCandidates(
+  candidates: { id: number; principle: string }[],
+  llm: Llm,
+): Promise<MergedRule[]> {
+  if (candidates.length <= MERGE_BATCH_SIZE) {
+    return (await llm.parse(mergePrompt(candidates), MergedSchema)).rules;
+  }
+  const partial: MergedRule[] = [];
+  for (let i = 0; i < candidates.length; i += MERGE_BATCH_SIZE) {
+    const chunk = candidates.slice(i, i + MERGE_BATCH_SIZE);
+    partial.push(...(await llm.parse(mergePrompt(chunk), MergedSchema)).rules);
+  }
+  // Second pass: each partial rule becomes a candidate, identified by its index.
+  const second = await llm.parse(
+    mergePrompt(partial.map((r, index) => ({ id: index, principle: r.description }))),
+    MergedSchema,
+  );
+  return second.rules.map((m) => {
+    const parts = [...new Set(m.commentIds)].flatMap((index) => (partial[index] ? [partial[index]] : []));
+    return {
+      description: m.description,
+      scope: m.scope.length ? m.scope : [...new Set(parts.flatMap((r) => r.scope))],
+      commentIds: parts.flatMap((r) => r.commentIds),
+    };
+  });
+}
+
 /** Turn review comments into rules, citing the comments each rule came from. */
 export async function extractRules(
   comments: ReviewComment[],
@@ -83,10 +118,10 @@ export async function extractRules(
   }
   if (candidates.length === 0) return [];
 
-  const merged = await llm.parse(mergePrompt(candidates), MergedSchema);
+  const merged = await mergeCandidates(candidates, llm);
 
   const rules: Rule[] = [];
-  merged.rules.forEach((m, index) => {
+  merged.forEach((m, index) => {
     const sources = [...new Set(m.commentIds)].flatMap((id) => {
       const c = byId.get(id);
       return c ? [{ prNumber: c.prNumber, commentUrl: c.url, reviewer: c.reviewer }] : [];
