@@ -14,12 +14,14 @@ import { summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--consensus N] [--verify] [--docs]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer]
   precedent stability <owner/repo> [--runs N] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
+/** Merge, audit and dedupe are asked this many times and decided by majority (see --consensus). */
+const DEFAULT_CONSENSUS = 3;
 const DEFAULT_RULES_FILE = ".precedent/rules.json";
 
 const { positionals, values } = parseArgs({
@@ -31,6 +33,7 @@ const { positionals, values } = parseArgs({
     post: { type: "boolean" },
     verify: { type: "boolean" },
     cache: { type: "string" },
+    consensus: { type: "string" },
     docs: { type: "boolean" },
     "max-pages": { type: "string" },
     runs: { type: "string" },
@@ -85,6 +88,7 @@ async function main(): Promise<void> {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
+      consensus: intFlag("consensus", DEFAULT_CONSENSUS),
       cache: values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined,
       onProgress: progress,
     });

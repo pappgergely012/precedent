@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ReviewComment } from "./github.js";
 import type { PrincipleCache } from "./cache.js";
+import { majority, majorityGroups } from "./consensus.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -22,6 +23,11 @@ export interface ExtractOptions {
   minRecentComments?: number;
   /** Extraction batches sent to the model at the same time. */
   concurrency?: number;
+  /**
+   * Ask the merge, audit and dedupe steps this many times and keep what a majority agrees on.
+   * The model answers differently on every run; voting removes most of that noise. 1 = ask once.
+   */
+  consensus?: number;
   /** Per-comment answers from earlier runs; comments found in it are not sent to the model again. */
   cache?: PrincipleCache;
   /** Current time, injectable for tests. */
@@ -103,6 +109,32 @@ Only return rules supported by two or more candidates; omit candidates that matc
 ${lines}`;
 }
 
+/** One merge call, or `k` of them with a majority vote on which items belong together. */
+async function mergeChunk(items: { id: number; principle: string }[], llm: Llm, k: number): Promise<MergedRule[]> {
+  if (k <= 1) return (await llm.parse(mergePrompt(items), MergedSchema)).rules;
+  const valid = new Set(items.map((i) => i.id));
+  const runs = (await Promise.all(Array.from({ length: k }, () => llm.parse(mergePrompt(items), MergedSchema)))).map((r) =>
+    r.rules.map((m) => ({ ...m, commentIds: [...new Set(m.commentIds)].filter((id) => valid.has(id)) })),
+  );
+  const groups = majorityGroups(runs.map((rules) => rules.map((m) => m.commentIds)), majority(k));
+  return groups.map((ids) => {
+    // Word the group like the run whose group overlapped it most (earliest run on ties).
+    const members = new Set(ids);
+    let best: MergedRule | undefined;
+    let bestOverlap = 0;
+    for (const rules of runs) {
+      for (const m of rules) {
+        const overlap = m.commentIds.filter((id) => members.has(id)).length;
+        if (overlap > bestOverlap) {
+          best = m;
+          bestOverlap = overlap;
+        }
+      }
+    }
+    return { description: best!.description, scope: best!.scope, commentIds: ids };
+  });
+}
+
 /**
  * Merge candidates into rules. Inputs larger than one call can answer are merged
  * in chunks, and the resulting rules are merged again until they fit in a single
@@ -112,6 +144,7 @@ export async function mergeCandidates(
   candidates: { id: number; principle: string }[],
   llm: Llm,
   onProgress: (message: string) => void = () => {},
+  consensus = 1,
 ): Promise<MergedRule[]> {
   // First level: ids are real comment ids.
   let rules: MergedRule[] = [];
@@ -119,7 +152,7 @@ export async function mergeCandidates(
   const firstChunks = Math.ceil(candidates.length / MERGE_BATCH_SIZE);
   for (let i = 0; i < candidates.length; i += MERGE_BATCH_SIZE) {
     const chunk = candidates.slice(i, i + MERGE_BATCH_SIZE);
-    rules.push(...(await llm.parse(mergePrompt(chunk), MergedSchema)).rules);
+    rules.push(...(await mergeChunk(chunk, llm, consensus)));
     onProgress(`Merge level 1: chunk ${i / MERGE_BATCH_SIZE + 1}/${firstChunks} done, ${rules.length} rules so far`);
   }
   let level = 1;
@@ -131,12 +164,13 @@ export async function mergeCandidates(
     const next: MergedRule[] = [];
     for (let i = 0; i < sorted.length; i += MERGE_BATCH_SIZE) {
       const chunk = sorted.slice(i, i + MERGE_BATCH_SIZE);
-      const out = await llm.parse(
-        mergePrompt(chunk.map((r, index) => ({ id: index, principle: r.description }))),
-        MergedSchema,
+      const outRules = await mergeChunk(
+        chunk.map((r, index) => ({ id: index, principle: r.description })),
+        llm,
+        consensus,
       );
       const grouped = new Set<number>();
-      for (const m of out.rules) {
+      for (const m of outRules) {
         const indices = [...new Set(m.commentIds)].filter((index) => chunk[index] && !grouped.has(index));
         const parts = indices.map((index) => chunk[index]!);
         if (parts.length === 0) continue;
@@ -175,9 +209,10 @@ ${lines}`;
 }
 
 /** Merge rules that restate the same obligation, pooling their sources. */
-export async function dedupeRules(rules: Rule[], llm: Llm): Promise<Rule[]> {
+export async function dedupeRules(rules: Rule[], llm: Llm, consensus = 1): Promise<Rule[]> {
   if (rules.length < 2) return rules;
-  const { groups } = await llm.parse(dedupePrompt(rules), DedupeSchema);
+  const answers = await Promise.all(Array.from({ length: Math.max(1, consensus) }, () => llm.parse(dedupePrompt(rules), DedupeSchema)));
+  const groups = consensus <= 1 ? answers[0]!.groups : majorityGroups(answers.map((a) => a.groups), majority(consensus));
 
   const used = new Set<number>();
   const absorbed = new Set<number>();
@@ -281,18 +316,26 @@ export async function auditSupport(
   rules: Rule[],
   byId: Map<number, ReviewComment>,
   llm: Llm,
-  opts: { minOccurrences: number; minPullRequests: number },
+  opts: { minOccurrences: number; minPullRequests: number; consensus?: number },
 ): Promise<{ rules: Rule[]; dropped: number }> {
+  const k = Math.max(1, opts.consensus ?? 1);
   const out: Rule[] = [];
   let dropped = 0;
   for (let i = 0; i < rules.length; i += SUPPORT_BATCH_SIZE) {
     const batch = rules.slice(i, i + SUPPORT_BATCH_SIZE);
-    const verdicts = new Map((await llm.parse(supportPrompt(batch, byId), SupportSchema)).rules.map((v) => [v.index, v]));
+    const answers = await Promise.all(Array.from({ length: k }, () => llm.parse(supportPrompt(batch, byId), SupportSchema)));
+    const runs = answers.map((a) => new Map(a.rules.map((v) => [v.index, v])));
     batch.forEach((rule, index) => {
-      const verdict = verdicts.get(index);
+      const verdicts = runs.flatMap((run) => (run.has(index) ? [run.get(index)!] : []));
       // No verdict means the model skipped the rule; keep it unaudited rather than lose it silently.
-      if (!verdict) return void out.push(rule);
-      const supporting = new Set(verdict.supportingIds);
+      if (verdicts.length === 0) return void out.push(rule);
+      // A comment supports the rule when a majority of the audits that judged it say so.
+      const need = majority(verdicts.length);
+      const votes = new Map<number, number>();
+      for (const v of verdicts) for (const id of new Set(v.supportingIds)) votes.set(id, (votes.get(id) ?? 0) + 1);
+      const supporting = new Set([...votes].filter(([, n]) => n >= need).map(([id]) => id));
+      const revisions = verdicts.flatMap((v) => (v.revisedDescription?.trim() ? [v.revisedDescription.trim()] : []));
+      const verdict = { revisedDescription: revisions.length >= need ? revisions[0]! : null };
       const sources = rule.sources.filter((s) => {
         const id = idOfUrl(s.commentUrl);
         return id !== undefined && supporting.has(id);
@@ -458,7 +501,9 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   // Stable input order keeps chunking identical between runs of the same data.
   candidates.sort((a, b) => a.id - b.id);
   log(`Merging ${candidates.length} candidate rules`);
-  const merged = await mergeCandidates(candidates, llm, log);
+  const consensus = Math.max(1, opts.consensus ?? 1);
+  if (consensus > 1) log(`Merging, auditing and deduplicating with a ${majority(consensus)}-of-${consensus} majority vote`);
+  const merged = await mergeCandidates(candidates, llm, log, consensus);
   stats.merged = merged.length;
   log(`Merged into ${merged.length} rules`);
 
@@ -496,12 +541,12 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   if (rules.length === 0) return rules;
 
   log(`Auditing ${rules.length} rules against the comments they cite`);
-  const audited = await auditSupport(rules, byId, llm, { minOccurrences, minPullRequests });
+  const audited = await auditSupport(rules, byId, llm, { minOccurrences, minPullRequests, consensus });
   stats.droppedByAudit = audited.dropped;
   if (audited.dropped > 0) log(`Dropped ${audited.dropped} rules whose comments do not support them`);
   if (audited.rules.length < 2) return audited.rules;
 
-  const deduped = mergeSharedSources(await dedupeRules(audited.rules, llm));
+  const deduped = mergeSharedSources(await dedupeRules(audited.rules, llm, consensus));
   if (deduped.length < audited.rules.length) log(`Merged ${audited.rules.length - deduped.length} near-duplicate rules`);
   return deduped;
 }

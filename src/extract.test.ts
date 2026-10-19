@@ -322,3 +322,68 @@ describe("batch concurrency", () => {
     expect(rules[0]!.sources).toHaveLength(4);
   });
 });
+
+describe("consensus", () => {
+  const candidates = [1, 2, 3, 4, 5, 6].map((id) => ({ id, principle: `P${id}` }));
+
+  it("merges by majority vote across repeated merge calls and words the group like its best-overlapping run", async () => {
+    const llm = fakeLlm(
+      { rules: [{ description: "Rule A", scope: ["a/**"], commentIds: [1, 2, 3] }] },
+      { rules: [{ description: "Rule A narrower", scope: [], commentIds: [1, 2] }, { description: "Rule B", scope: [], commentIds: [5, 6] }] },
+      { rules: [{ description: "Rule A again", scope: [], commentIds: [1, 2, 4] }] },
+    );
+    const merged = await mergeCandidates(candidates, llm, () => {}, 3);
+    // 1-2 has 3 votes; 1-3, 2-3, 1-4, 2-4, 5-6 have at most 1, so only {1,2} survives.
+    expect(merged).toEqual([{ description: "Rule A", scope: ["a/**"], commentIds: [1, 2] }]);
+  });
+
+  it("ignores ids the model invents when voting", async () => {
+    const llm = fakeLlm(
+      { rules: [{ description: "X", scope: [], commentIds: [1, 2, 99] }] },
+      { rules: [{ description: "X", scope: [], commentIds: [1, 2, 99] }] },
+    );
+    const merged = await mergeCandidates(candidates, llm, () => {}, 2);
+    expect(merged[0]!.commentIds).toEqual([1, 2]);
+  });
+
+  it("audits by majority: a comment counts as support only when most audits say so", async () => {
+    const base = rule("a", "Do X everywhere", [src(1, "anna"), src(2, "bob"), src(3, "cy")]);
+    const byId = new Map([1, 2, 3].map((id) => [id, comment(id)]));
+    const llm = fakeLlm(
+      { rules: [{ index: 0, supportingIds: [1, 2, 3], revisedDescription: "Do X in TS" }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: "Do X in TS files" }] },
+    );
+    const { rules } = await auditSupport([base], byId, llm, { minOccurrences: 2, minPullRequests: 2, consensus: 3 });
+    expect(rules[0]!.sources.map((x) => x.prNumber)).toEqual([1, 2]);
+    expect(rules[0]!.description).toBe("Do X in TS");
+  });
+
+  it("does not revise the wording unless a majority of audits asked for it", async () => {
+    const base = rule("a", "Do X everywhere", [src(1, "anna"), src(2, "bob")]);
+    const byId = new Map([1, 2].map((id) => [id, comment(id)]));
+    const llm = fakeLlm(
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: "Do X in TS" }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+    );
+    const { rules } = await auditSupport([base], byId, llm, { minOccurrences: 2, minPullRequests: 2, consensus: 3 });
+    expect(rules[0]!.description).toBe("Do X everywhere");
+  });
+
+  it("dedupes only the groups most runs agree on", async () => {
+    const rules = [rule("a", "One", [src(1, "anna"), src(2, "bob")]), rule("b", "Two", [src(3, "anna"), src(4, "bob")]), rule("c", "Three", [src(5, "anna"), src(6, "bob")])];
+    const llm = fakeLlm({ groups: [[0, 1]] }, { groups: [[0, 1, 2]] }, { groups: [[0, 2]] });
+    const out = await dedupeRules(rules, llm, 3);
+    // 0-1 has 2 votes, 0-2 has 2 votes, 1-2 has 1: chained into one group of three.
+    expect(out).toHaveLength(1);
+    expect(out[0]!.sources).toHaveLength(6);
+  });
+
+  it("asks once by default", async () => {
+    let calls = 0;
+    const llm: Llm = { parse: async (_p, schema) => { calls++; return schema.parse({ rules: [] }); } };
+    await mergeCandidates(candidates, llm);
+    expect(calls).toBe(1);
+  });
+});
