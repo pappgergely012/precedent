@@ -76,12 +76,14 @@ async function main(): Promise<void> {
     const prs = new Set(comments.map((c) => c.prNumber));
     console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
 
-    let rules = await extractRules(comments, anthropicLlm(), {
+    const llm = anthropicLlm();
+    let rules = await extractRules(comments, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
       onProgress: progress,
     });
+    const usage = llm.usage?.();
     if (values.verify) {
       const before = rules.length;
       rules = await verifyRules(repo, rules, { token: process.env.GITHUB_TOKEN, minOccurrences: intFlag("min-occurrences", 2) });
@@ -99,6 +101,9 @@ async function main(): Promise<void> {
       console.log(`   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`);
       for (const s of rule.sources.slice(0, 3)) console.log(`   - #${s.prNumber} @${s.reviewer} ${s.commentUrl}`);
     });
+    if (usage) {
+      console.log(`\nModel usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
+    }
     if (values.out) {
       await writeRulesFile(values.out, repo, rules);
       console.log(`\nWrote ${rules.length} rules to ${values.out}`);
