@@ -1,5 +1,5 @@
 import { isSingleReviewer } from "./extract.js";
-import { ruleTier, type Rule } from "./rule.js";
+import { CORE_MIN_COMMENTS, ruleTier, type Rule } from "./rule.js";
 
 export interface MineOutputOptions {
   /** List the emerging candidates too. */
@@ -44,7 +44,10 @@ export function renderMineOutput(rules: Rule[], opts: MineOutputOptions = {}): s
       out.push(emerging.length > top ? `\nEmerging candidates (top ${top} of ${emerging.length}); thinner evidence, the first to change when you mine again:` : "\nEmerging candidates (thinner evidence, the first to change when you mine again):");
       emerging.slice(0, top).forEach((r, i) => out.push(...ruleLines(r, i + 1)));
     } else {
-      out.push(`\n${emerging.length} emerging candidates not shown. Add --all to list them; --out saves every rule.`);
+      // A rule one maintainer asked for again and again is not core by definition, but it is not thin either.
+      const solid = emerging.filter((r) => r.sources.length >= CORE_MIN_COMMENTS).length;
+      const note = solid > 0 ? ` (${solid} with ${CORE_MIN_COMMENTS}+ comments but a single reviewer)` : "";
+      out.push(`\n${emerging.length} emerging candidates not shown${note}. Add --all to list them; --out saves every rule.`);
     }
   }
   return out;
