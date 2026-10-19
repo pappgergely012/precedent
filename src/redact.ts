@@ -20,6 +20,12 @@ const RULES: { kind: RedactionKind; pattern: RegExp; replace: string | ((match: 
     pattern: /(?<![A-Za-z0-9/+=_-])(?=[A-Za-z0-9/+]*[A-Z])(?=[A-Za-z0-9/+]*[a-z])(?=[A-Za-z0-9/+]*\d)[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=_-])/g,
     replace: "[REDACTED:token]",
   },
+  { kind: "token", pattern: /\bglpat-[A-Za-z0-9_-]{20,}/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bhttps:\/\/hooks\.slack\.com\/(?:services|workflows|triggers)\/[A-Za-z0-9/_-]{16,}/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bxapp-[A-Za-z0-9-]{10,}/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bdo[opr]_v1_[a-f0-9]{32,}\b/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bSK[0-9a-fA-F]{32}\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{20,}/gi, replace: (_m, prefix) => `${prefix}[REDACTED:token]` },
@@ -31,8 +37,8 @@ const RULES: { kind: RedactionKind; pattern: RegExp; replace: string | ((match: 
     // so prose and code that merely mention a password or a token are left alone
     // The value must not continue into a call or an index: `api_key = get_key()` is code, not a secret.
     pattern: /\b(\w*(?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\w*\s*[:=]\s*)(["']?)(?![A-Za-z_]\w*\s*[(\[])([A-Za-z0-9_\-/+=.]{16,})\2(?![A-Za-z0-9_\-/+=.(\[])/gi,
-    // An unquoted all-lowercase value is a variable or constant name, not a random secret: keep it.
-    replace: (m, name, quote, value) => (quote === "" && /^[a-z_]+$/.test(value) ? m : `${name}${quote}[REDACTED:secret]${quote}`),
+    // An unquoted value that is a variable, constant or environment lookup is a name, not a random secret: keep it.
+    replace: (m, name, quote, value) => (quote === "" && /^(?:[a-z_]+|[A-Z][A-Z0-9]*_[A-Z0-9_]+|(?:process\.env|import\.meta\.env|os\.environ)\b.*)$/.test(value) ? m : `${name}${quote}[REDACTED:secret]${quote}`),
   },
 ];
 

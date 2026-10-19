@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, writeFile, readdir, stat } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExportError, MAX_RULE_CHARS, START_MARKER, END_MARKER, applyBlock, renderBlock, selectRules, suspiciousRules, writeExport, cleanText } from "./export.js";
@@ -309,5 +309,61 @@ describe("export fuzz (seeded)", () => {
       const text = randomText(prng(seed), 10);
       expect(cleanText(cleanText(text)), `seed ${seed}`).toBe(cleanText(text));
     }
+  });
+});
+
+describe("writeExport targets", () => {
+  const block = render(core("Use gate()."));
+  const tmp = () => mkdtemp(join(tmpdir(), "precedent-export-"));
+
+  it("writes through a symlink and keeps it a symlink", async () => {
+    const dir = await tmp();
+    const real = join(dir, "AGENTS.md");
+    const link = join(dir, "CLAUDE.md");
+    await writeFile(real, "shared notes\n");
+    await symlink("AGENTS.md", link);
+    await writeExport(link, block);
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    const text = await readFile(real, "utf8");
+    expect(text.startsWith("shared notes\n")).toBe(true);
+    expect(text).toContain(START_MARKER);
+  });
+
+  it("keeps bytes outside the block exactly, even when they are not valid UTF-8", async () => {
+    const dir = await tmp();
+    const path = join(dir, "AGENTS.md");
+    const before = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9, 0xff, 0xa0]), Buffer.from(" notes\n")]);
+    const after = Buffer.from("\nafter \u00e0 \ud83d\ude42\n", "utf8");
+    await writeFile(path, Buffer.concat([before, Buffer.from(`${block}`), after]));
+    await writeExport(path, render(core("Use gate() in tests, café ☕.")));
+    const out = await readFile(path);
+    expect(out.subarray(0, before.length).equals(before)).toBe(true);
+    expect(out.subarray(out.length - after.length).equals(after)).toBe(true);
+    expect(out.toString("utf8")).toContain("café ☕");
+  });
+
+  it("refuses a read-only target", async () => {
+    const dir = await tmp();
+    const path = join(dir, "AGENTS.md");
+    await writeFile(path, "locked\n");
+    await chmod(path, 0o444);
+    if (process.getuid?.() === 0) return; // root ignores permission bits
+    await expect(writeExport(path, block)).rejects.toThrow(/read-only/);
+    expect(await readFile(path, "utf8")).toBe("locked\n");
+  });
+
+  it("cuts long text on a grapheme boundary, never inside an emoji", () => {
+    const text = "x".repeat(MAX_RULE_CHARS - 2) + "👨‍👩‍👧‍👦 and more";
+    const out = cleanText(text);
+    expect(out.endsWith("…")).toBe(true);
+    expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+    expect(out).not.toContain("\u200d…");
+  });
+
+  it("warns about destructive and installer commands", () => {
+    for (const text of ["Never run rm -rf build in CI.", "Run chmod 777 on the cache", "Use pip install foo first", "decode with base64 -d"]) {
+      expect(suspiciousRules([core(text)]), text).toHaveLength(1);
+    }
+    expect(suspiciousRules([core("Use gate() in tests.")])).toHaveLength(0);
   });
 });
