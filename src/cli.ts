@@ -7,10 +7,12 @@ import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js"
 import { anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
+import { summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
   precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--verify]
+  precedent stability <owner/repo> [--runs N] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -25,6 +27,7 @@ const { positionals, values } = parseArgs({
     post: { type: "boolean" },
     verify: { type: "boolean" },
     "max-pages": { type: "string" },
+    runs: { type: "string" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
     "max-age-days": { type: "string" },
@@ -94,6 +97,20 @@ async function main(): Promise<void> {
       await writeRulesFile(values.out, repo, rules);
       console.log(`\nWrote ${rules.length} rules to ${values.out}`);
     }
+  } else if (command === "stability" && repo) {
+    requireAnthropicKey();
+    const runs = intFlag("runs", 3);
+    const comments = await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) });
+    console.log(`Fetched ${comments.length} review comments once; mining ${runs} times (each run costs about as much as one \`mine\`).`);
+    const results = [];
+    for (let i = 1; i <= runs; i++) {
+      results.push(await extractRules(comments, anthropicLlm(), { maxComments: intFlag("max-comments", 1000) }));
+      console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
+    }
+    const s = summarizeStability(results);
+    console.log(`\nRule counts per run: ${s.ruleCounts.join(", ")}`);
+    console.log(`Mean pairwise overlap (Jaccard): ${s.meanOverlap.toFixed(2)}, worst pair: ${s.minOverlap.toFixed(2)}`);
+    console.log(`Rules of run 1 found in every other run: ${s.inAllRuns}/${s.ruleCounts[0]}, in at least half: ${s.inMajority}/${s.ruleCounts[0]}`);
   } else if (command === "review" && (values.diff || (repo && prArg))) {
     requireAnthropicKey();
     const token = process.env.GITHUB_TOKEN;
