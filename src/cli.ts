@@ -15,9 +15,9 @@ import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs] [--all]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--extraction-votes N] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
-  precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
+  precedent stability <owner/repo> [--runs N] [--extraction-votes N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -32,6 +32,7 @@ const { positionals, values } = parseArgs({
     post: { type: "boolean" },
     verify: { type: "boolean" },
     cache: { type: "string" },
+    "extraction-votes": { type: "string" },
     top: { type: "string" },
     "pin-extraction": { type: "boolean" },
     docs: { type: "boolean" },
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
+      extractionVotes: intFlag("extraction-votes", 1),
       cache: values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined,
       onProgress: progress,
     });
@@ -164,7 +166,7 @@ async function main(): Promise<void> {
     const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
+      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), extractionVotes: intFlag("extraction-votes", 1), cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
     const cuts = stabilityCuts(results, top);

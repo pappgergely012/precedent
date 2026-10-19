@@ -22,6 +22,12 @@ export interface ExtractOptions {
   minRecentComments?: number;
   /** Extraction batches sent to the model at the same time. */
   concurrency?: number;
+  /**
+   * Ask the model this many times about every comment and keep it as a candidate only when a
+   * majority of the answers say it states a rule. One answer per comment is noisy and everything
+   * after it inherits that noise. 1 = ask once; larger values multiply the extraction calls.
+   */
+  extractionVotes?: number;
   /** Per-comment answers from earlier runs; comments found in it are not sent to the model again. */
   cache?: PrincipleCache;
   /** Current time, injectable for tests. */
@@ -29,6 +35,9 @@ export interface ExtractOptions {
   /** Called with a human-readable status line as the work advances. */
   onProgress?: (message: string) => void;
 }
+
+/** Votes needed for a majority of `k` answers (2 of 3, 2 of 2, 1 of 1). */
+const majority = (k: number): number => Math.floor(k / 2) + 1;
 
 const MIN_BODY_LENGTH = 25;
 const DEFAULT_MAX_AGE_DAYS = 730;
@@ -74,6 +83,9 @@ const MergedSchema = z.object({
 type MergedRule = z.infer<typeof MergedSchema>["rules"][number];
 
 /** Exactly what the model sees of one comment; also what the cache is keyed on. */
+/** A cached answer is only valid for the procedure that produced it: a voted answer differs from a single one. */
+const cacheText = (c: ReviewComment, votes: number) => (votes > 1 ? `${commentText(c)}\n#votes=${votes}` : commentText(c));
+
 const commentText = (c: ReviewComment) => `file: ${c.path}\n${c.body.trim().slice(0, 600)}`;
 
 function principlesPrompt(batch: ReviewComment[]): string {
@@ -422,30 +434,34 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   const byId = new Map(usable.map((c) => [c.id, c]));
 
   const candidates: { id: number; principle: string }[] = [];
+  const votes = Math.max(1, opts.extractionVotes ?? 1);
   const cache = opts.cache;
   const pending: ReviewComment[] = [];
   for (const c of usable) {
-    const cached = cache?.get(c.id, commentText(c));
+    const cached = cache?.get(c.id, cacheText(c, votes));
     if (cached === undefined) pending.push(c);
     else if (cached !== null) candidates.push({ id: c.id, principle: cached });
   }
   if (cache) log(`${usable.length - pending.length} of ${usable.length} comments answered from the cache`);
 
   const batchList = Array.from({ length: Math.ceil(pending.length / batchSize) }, (_, i) => pending.slice(i * batchSize, (i + 1) * batchSize));
-  log(`Analysing ${pending.length} of ${comments.length} comments in ${batchList.length} batches`);
+  log(`Analysing ${pending.length} of ${comments.length} comments in ${batchList.length} batches${votes > 1 ? `, each asked ${votes} times` : ""}`);
   let done = 0;
   const outputs = await mapPool(batchList, concurrency, async (batch) => {
-    const out = await llm.parse(principlesPrompt(batch), PrinciplesSchema);
+    const outs = await Promise.all(Array.from({ length: votes }, () => llm.parse(principlesPrompt(batch), PrinciplesSchema)));
     log(`Batch ${++done}/${batchList.length} done`);
-    return { batch, out };
+    return { batch, outs };
   });
-  for (const { batch, out } of outputs) {
-    const answered = new Map(out.items.map((item) => [item.id, item.principle]));
+  for (const { batch, outs } of outputs) {
+    const answers = outs.map((out) => new Map(out.items.map((item) => [item.id, item.principle])));
     for (const c of batch) {
-      // A comment the model skipped is not cached: it was not judged, so ask again next time.
-      if (!answered.has(c.id)) continue;
-      const principle = answered.get(c.id) ?? null;
-      cache?.set(c.id, commentText(c), principle);
+      // A comment no answer covered is not cached: it was not judged, so ask again next time.
+      const judged = answers.filter((a) => a.has(c.id));
+      if (judged.length === 0) continue;
+      // A candidate when most of the answers that judged it say it states a rule; the wording is the first such answer's.
+      const yes = judged.map((a) => a.get(c.id)).filter((p): p is string => !!p);
+      const principle = yes.length >= majority(judged.length) ? yes[0]! : null;
+      cache?.set(c.id, cacheText(c, votes), principle);
       if (principle) candidates.push({ id: c.id, principle });
     }
   }

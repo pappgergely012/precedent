@@ -104,3 +104,52 @@ describe("extractRules with a cache", () => {
     expect(next.state.askedIds.sort()).toEqual([1, 2]);
   });
 });
+
+describe("extraction votes", () => {
+  /** Answers each extraction call from a script: call n of a comment gets script[n]. */
+  const scripted = (script: (string | null | "skip")[]) => {
+    let call = 0;
+    const llm: Llm = {
+      parse: async (prompt, schema) => {
+        if (prompt.includes("analyse code review comments")) {
+          const ids = [...prompt.matchAll(/^\[(\d+)\] file:/gm)].map((m) => Number(m[1]));
+          const answer = script[call++] ?? null;
+          return schema.parse({ items: answer === "skip" ? [] : ids.map((id) => ({ id, principle: answer })) });
+        }
+        if (prompt.includes("candidate coding rules")) return schema.parse({ rules: [{ description: "R", scope: [], commentIds: [1, 2] }] });
+        if (prompt.includes("audit rules")) return schema.parse({ rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] });
+        return schema.parse({ groups: [] });
+      },
+    };
+    return { llm, calls: () => call };
+  };
+  const comments = [1, 2].map((id) => comment(id));
+
+  it("makes a comment a candidate only when most answers say it states a rule", async () => {
+    const yes2of3 = scripted(["Rule A", null, "Rule A2"]);
+    expect(await extractRules(comments, yes2of3.llm, { extractionVotes: 3 })).toHaveLength(1);
+    const yes1of3 = scripted([null, "Rule A", null]);
+    expect(await extractRules(comments, yes1of3.llm, { extractionVotes: 3 })).toEqual([]);
+  });
+
+  it("asks once by default and 3 times per batch with 3 votes", async () => {
+    const once = scripted(["Rule A"]);
+    await extractRules(comments, once.llm, {});
+    const extractionCallsOnce = once.calls();
+    const thrice = scripted(["Rule A", "Rule A", "Rule A"]);
+    await extractRules(comments, thrice.llm, { extractionVotes: 3 });
+    expect(extractionCallsOnce).toBe(1);
+    expect(thrice.calls()).toBe(3);
+  });
+
+  it("does not count an answer that skipped the comment, and keeps voted and single answers apart in the cache", async () => {
+    const cache = memoryCache();
+    // two of three answers judged the comments and both say rule; the skipped one is ignored
+    const s = scripted(["Rule A", "skip", "Rule A"]);
+    expect(await extractRules(comments, s.llm, { extractionVotes: 3, cache })).toHaveLength(1);
+    // a single-answer run must not reuse the voted answer
+    const single = scripted(["Rule A"]);
+    await extractRules(comments, single.llm, { cache });
+    expect(single.calls()).toBe(1);
+  });
+});
