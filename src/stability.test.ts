@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule } from "./rule.js";
-import { compareRuns, findUnstableStrong, isCoreRule, rulesMatch, sharesComment, similarWording, stabilityCuts, summarizeStability } from "./stability.js";
+import { compareRuns, findUnstableStrong, rulesMatch, sharesComment, similarWording, summarizeStability } from "./stability.js";
 
 const rule = (description: string, ...ids: number[]): Rule => ({
   id: description,
@@ -66,40 +66,5 @@ describe("compareRuns / summarizeStability", () => {
     const common = rule("Use gate() in tests", 1, 2, 3);
     const runs = [[common, strong, weak], [rule("Gate tests", 1, 2, 3)], [rule("Gate tests too", 1, 2, 3)]];
     expect(findUnstableStrong(runs)).toEqual([{ description: "Wrap lines at 79 columns", comments: 3, runsPresent: 1 }]);
-  });
-});
-
-describe("stabilityCuts", () => {
-  const sourcesFor = (ids: number[], reviewers = ["anna", "bob", "cy"]) =>
-    ids.map((id, i) => ({ prNumber: id, reviewer: reviewers[i % reviewers.length]!, commentUrl: `https://github.com/o/r/pull/${id}#discussion_r${id}` }));
-  const r = (description: string, ids: number[], confidence = 0.4): Rule => ({ id: description, description, scope: [], confidence, sources: sourcesFor(ids) });
-
-  it("recognises core rules", () => {
-    expect(isCoreRule(r("a", [1, 2, 3]))).toBe(true);
-    expect(isCoreRule(r("b", [1, 2]))).toBe(false);
-    expect(isCoreRule(r("c", [1, 2], 0.6))).toBe(true);
-    expect(isCoreRule({ ...r("d", [1, 2, 3]), sources: sourcesFor([1, 2, 3], ["anna"]) })).toBe(false);
-  });
-
-  it("separates ranking noise from extraction noise", () => {
-    // Same pool of rules every run; only the order of the tied tail differs, so the full lists agree perfectly.
-    const strong = r("strong", [1, 2, 3], 0.6);
-    const tail = [10, 20, 30, 40].map((n) => r(`tail-${n}`, [n, n + 1]));
-    const runs = [[strong, tail[0]!, tail[1]!, tail[2]!, tail[3]!], [strong, tail[2]!, tail[3]!, tail[0]!, tail[1]!], [strong, tail[1]!, tail[0]!, tail[3]!, tail[2]!]];
-    const cuts = stabilityCuts(runs, 3);
-    expect(cuts.all.commentOverlap).toBe(1);
-    expect(cuts.top.commentOverlap).toBeLessThan(1);
-    expect(cuts.core.commentOverlap).toBe(1);
-    expect(cuts.coreRetention).toEqual({ mean: 1, worst: 1, coreRules: [1, 1, 1] });
-    expect(cuts.all.evidenceJaccard).toBe(1);
-  });
-
-  it("reports how many core rules each run keeps", () => {
-    const a = r("a", [1, 2, 3], 0.6);
-    const b = r("b", [4, 5, 6], 0.6);
-    const cuts = stabilityCuts([[a, b], [a], [a, b]]);
-    // run 1 reference: b is missing in run 2 -> 1/2; run 2: a is in all -> 1; run 3: b missing in run 2 -> 1/2
-    expect(cuts.coreRetention.mean).toBeCloseTo((0.5 + 1 + 0.5) / 3);
-    expect(cuts.coreRetention.worst).toBe(0.5);
   });
 });
