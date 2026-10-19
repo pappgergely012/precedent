@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractDocRules, fetchGuideDocs, isPointer, reconcileRules, selectGuidePaths, type DocRule } from "./docs.js";
+import { extractDocRules, fetchGuideDocs, isPointer, reconcileRules, selectGuidePaths, wordOverlap, type DocRule } from "./docs.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -106,18 +106,36 @@ describe("reconcileRules", () => {
     confidence: 0.6,
     sources: [{ prNumber: 1, reviewer: "anna", commentUrl: "https://github.com/o/r/pull/1#discussion_r1" }],
   });
-  const docRules: DocRule[] = [
-    { description: "Add a changelog entry", path: "CONTRIBUTING.md", quote: "Add a changelog entry." },
-    { description: "Do not add changelog entries for fixes", path: "CONTRIBUTING.md", quote: "No changelog for fixes." },
-    { description: "Sign commits", path: "CONTRIBUTING.md", quote: "Sign commits." },
-  ];
+  const doc = (description: string, quote: string): DocRule => ({ description, path: "CONTRIBUTING.md", quote });
+
+  /**
+   * Fake model: the first-pass prompt returns `matches`; verification prompts are answered by
+   * `judge(ruleText, quote)`, so tests do not depend on call order or pair numbering.
+   */
+  const fakeModel = (matches: unknown[], judge: (ruleText: string, quote: string) => "same" | "conflict" | "no") => {
+    const verifyCalls: number[] = [];
+    const llm: Llm = {
+      parse: async (prompt, schema) => {
+        if (prompt.includes("Two lists of coding rules")) return schema.parse({ matches });
+        const pairs = [...prompt.matchAll(/Pair (\d+)\nMined rule: (.*)\nGuide text: "(.*)"/g)];
+        verifyCalls.push(pairs.length);
+        return schema.parse({ verdicts: pairs.map((m) => ({ pair: Number(m[1]), verdict: judge(m[2]!, m[3]!) })) });
+      },
+    };
+    return { llm, verifyCalls };
+  };
+
+  const changelog = doc("Add a changelog entry for features", "Add a changelog entry.");
+  const noChangelog = doc("Do not add changelog entries for fixes", "No changelog for fixes.");
+  const sign = doc("Sign commits", "Sign commits.");
   const rules = [rule("a", "Add a changelog entry to feature PRs"), rule("b", "Add changelog entries to bug fixes"), rule("c", "Use gate() in tests")];
+  const docRules = [changelog, noChangelog, sign];
 
   it("tags both, conflict and enforced, and lists documented-only rules", async () => {
-    const llm = fakeLlm({ matches: [
-      { ruleIndex: 0, docIndex: 0, relation: "same" },
-      { ruleIndex: 1, docIndex: 1, relation: "conflict" },
-    ] }, { verdicts: [{ pair: 0, verdict: "same" }, { pair: 1, verdict: "conflict" }] });
+    const { llm } = fakeModel(
+      [{ ruleIndex: 0, docIndex: 0, relation: "same" }, { ruleIndex: 1, docIndex: 1, relation: "conflict" }],
+      (rule, quote) => (quote === "Add a changelog entry." && rule.includes("feature") ? "same" : quote === "No changelog for fixes." && rule.includes("bug fixes") ? "conflict" : "no"),
+    );
     const out = await reconcileRules(rules, docRules, llm);
     expect(out.rules.map((r) => r.origin)).toEqual(["both", "conflict", "enforced"]);
     expect(out.rules[0]!.docRefs).toEqual([{ path: "CONTRIBUTING.md", quote: "Add a changelog entry." }]);
@@ -125,27 +143,39 @@ describe("reconcileRules", () => {
     expect(out.documentedOnly.map((d) => d.description)).toEqual(["Sign commits"]);
   });
 
-  it("ignores invalid indices and repeated matches for one rule", async () => {
-    const llm = fakeLlm({ matches: [
-      { ruleIndex: 9, docIndex: 0, relation: "same" },
-      { ruleIndex: 0, docIndex: 9, relation: "same" },
-      { ruleIndex: 0, docIndex: 0, relation: "same" },
-      { ruleIndex: 0, docIndex: 1, relation: "conflict" },
-    ] }, { verdicts: [{ pair: 0, verdict: "same" }] });
-    const out = await reconcileRules(rules, docRules, llm);
-    expect(out.rules[0]!.origin).toBe("both");
-    expect(out.documentedOnly).toHaveLength(2);
+  it("finds a pair the first pass missed through the closest wording, but only if the second look confirms it", async () => {
+    const mined = [rule("a", "Use assertRaisesMessage when the exception message matters")];
+    const docs = [doc("Prefer assertRaisesMessage over assertRaises", "Use assertRaisesMessage() rather than assertRaises() when the message matters."), sign];
+    const confirmed = await reconcileRules(mined, docs, fakeModel([], () => "same").llm);
+    expect(confirmed.rules[0]!.origin).toBe("both");
+    const rejected = await reconcileRules(mined, docs, fakeModel([], () => "no").llm);
+    expect(rejected.rules[0]!.origin).toBe("enforced");
   });
 
-  it("treats a pair the second look does not confirm as enforced, and never calls it documented", async () => {
-    const llm = fakeLlm(
-      { matches: [{ ruleIndex: 0, docIndex: 0, relation: "same" }, { ruleIndex: 1, docIndex: 1, relation: "same" }, { ruleIndex: 2, docIndex: 2, relation: "same" }] },
-      { verdicts: [{ pair: 0, verdict: "no" }, { pair: 1, verdict: "conflict" }] },
-    );
+  it("ignores invalid indices from the first pass", async () => {
+    const { llm } = fakeModel([{ ruleIndex: 9, docIndex: 0, relation: "same" }, { ruleIndex: 0, docIndex: 9, relation: "same" }], () => "no");
     const out = await reconcileRules(rules, docRules, llm);
-    // pair 0 rejected, pair 1 downgraded/upgraded to the verified relation, pair 2 got no verdict
-    expect(out.rules.map((r) => r.origin)).toEqual(["enforced", "conflict", "enforced"]);
-    expect(out.documentedOnly.map((d) => d.description)).toEqual(["Add a changelog entry", "Sign commits"]);
+    expect(out.rules.every((r) => r.origin === "enforced")).toBe(true);
+  });
+
+  it("never calls an unconfirmed pair documented", async () => {
+    const { llm } = fakeModel([{ ruleIndex: 0, docIndex: 0, relation: "same" }, { ruleIndex: 2, docIndex: 2, relation: "same" }], () => "no");
+    const out = await reconcileRules(rules, docRules, llm);
+    expect(out.rules.map((r) => r.origin)).toEqual(["enforced", "enforced", "enforced"]);
+  });
+
+  it("requires a conflict to be confirmed twice", async () => {
+    let asked = 0;
+    const { llm } = fakeModel([{ ruleIndex: 1, docIndex: 1, relation: "conflict" }], (rule) => (rule.includes("bug fixes") && ++asked === 1 ? "conflict" : "no"));
+    const out = await reconcileRules(rules, docRules, llm);
+    expect(out.rules[1]!.origin).toBe("enforced");
+  });
+
+  it("drops documented-only entries that restate a mined rule, whatever the second look said", async () => {
+    const mined = [rule("a", "Use assertRaisesMessage rather than assertRaises when the exception message matters")];
+    const docs = [doc("Use assertRaisesMessage rather than assertRaises when the exception message matters", "Prefer assertRaisesMessage."), sign];
+    const out = await reconcileRules(mined, docs, fakeModel([], () => "no").llm);
+    expect(out.documentedOnly.map((d) => d.description)).toEqual(["Sign commits"]);
   });
 
   it("makes no model call when there is nothing to compare", async () => {
@@ -153,6 +183,15 @@ describe("reconcileRules", () => {
     const out = await reconcileRules(rules, [], llm);
     expect(out.rules.every((r) => r.origin === "enforced")).toBe(true);
     expect(out.documentedOnly).toEqual([]);
+  });
+});
+
+describe("wordOverlap", () => {
+  it("counts shared content words regardless of plural and stop words", () => {
+    const o = wordOverlap("Add tests for the new endpoints", "endpoint tests are required");
+    expect(o.shared).toBe(2);
+    expect(o.share).toBeGreaterThan(0.6);
+    expect(wordOverlap("Sign commits", "Name hooks").shared).toBe(0);
   });
 });
 

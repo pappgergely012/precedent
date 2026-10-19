@@ -209,38 +209,109 @@ export interface Reconciled {
   documentedOnly: DocRule[];
 }
 
+const STOP = new Set(["a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "when", "with", "that", "is", "are", "be", "not", "do", "does", "it", "its", "as", "at", "by", "from", "this", "than", "instead", "rather", "should", "must", "always", "never", "use", "add", "each", "every", "new"]);
+
+/** Lower-cased content words with a crude plural/-ing stem, so "tests" and "test" meet. */
+const words = (text: string): Set<string> =>
+  new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9_]+/)
+      .filter((t) => t.length > 2 && !STOP.has(t))
+      .map((t) => t.replace(/(ing|es|s)$/, "")),
+  );
+
+/** Shared content words as a share of the shorter text, and how many there are. */
+export function wordOverlap(a: string, b: string): { share: number; shared: number } {
+  const wa = words(a);
+  const wb = words(b);
+  let shared = 0;
+  for (const w of wa) if (wb.has(w)) shared++;
+  return { share: shared / Math.max(1, Math.min(wa.size, wb.size)), shared };
+}
+
+const CANDIDATES_PER_RULE = 3;
+const VERIFY_BATCH = 40;
+/** A documented rule this close in wording to a mined rule is the same rule, whatever the second look said. */
+const NEAR_IDENTICAL = { share: 0.7, shared: 3 };
+
+/** The documented rules whose wording is closest to a mined rule: proposals for the strict second look. */
+function retrieve(rule: Rule, docRules: DocRule[]): number[] {
+  return docRules
+    .map((d, i) => ({ i, ...wordOverlap(rule.description, `${d.description} ${d.quote}`) }))
+    .filter((c) => c.shared >= 2 && c.share >= 0.3)
+    .sort((x, y) => y.share - x.share || y.shared - x.shared || x.i - y.i)
+    .slice(0, CANDIDATES_PER_RULE)
+    .map((c) => c.i);
+}
+
+type Verdict = "same" | "conflict" | "no";
+
+async function judgePairs(pairs: { ruleText: string; quote: string }[], llm: Llm): Promise<Verdict[]> {
+  const out: Verdict[] = [];
+  for (let i = 0; i < pairs.length; i += VERIFY_BATCH) {
+    const chunk = pairs.slice(i, i + VERIFY_BATCH);
+    const { verdicts } = await llm.parse(verifyPrompt(chunk), VerifySchema);
+    const byPair = new Map(verdicts.map((v) => [v.pair, v.verdict]));
+    chunk.forEach((_, j) => out.push(byPair.get(j) ?? "no"));
+  }
+  return out;
+}
+
 /** Tag every mined rule as documented too ("both"), a possible conflict, or enforced only. */
 export async function reconcileRules(rules: Rule[], docRules: DocRule[], llm: Llm): Promise<Reconciled> {
   if (docRules.length === 0 || rules.length === 0) {
     return { rules: rules.map((r) => ({ ...r, origin: "enforced" as const })), documentedOnly: docRules };
   }
   const { matches } = await llm.parse(reconcilePrompt(rules, docRules), ReconcileSchema);
-  const byRule = new Map<number, { docIndex: number; relation: "same" | "conflict" }>();
-  for (const m of matches) {
-    if (rules[m.ruleIndex] && docRules[m.docIndex] && !byRule.has(m.ruleIndex)) byRule.set(m.ruleIndex, m);
-  }
 
-  // Second look at every proposed pair, with only the two texts in view: the first pass sees
-  // many rules at once and over-matches on topic. Anything not confirmed is treated as enforced.
-  const proposed = [...byRule.entries()];
-  if (proposed.length > 0) {
-    const verdicts = await llm.parse(
-      verifyPrompt(proposed.map(([ruleIndex, m]) => ({ ruleText: rules[ruleIndex]!.description, quote: docRules[m.docIndex]!.quote }))),
-      VerifySchema,
-    );
-    const verdictOf = new Map(verdicts.verdicts.map((v) => [v.pair, v.verdict]));
-    proposed.forEach(([ruleIndex, m], pair) => {
-      const verdict = verdictOf.get(pair);
-      if (verdict === "same" || verdict === "conflict") byRule.set(ruleIndex, { docIndex: m.docIndex, relation: verdict });
-      else byRule.delete(ruleIndex);
+  // Proposals: what the first pass matched, plus the closest documented rules by wording, so a
+  // match the first pass missed still gets the strict second look.
+  const proposals = new Map<string, { ruleIndex: number; docIndex: number }>();
+  const propose = (ruleIndex: number, docIndex: number) => {
+    if (rules[ruleIndex] && docRules[docIndex]) proposals.set(`${ruleIndex}:${docIndex}`, { ruleIndex, docIndex });
+  };
+  for (const m of matches) propose(m.ruleIndex, m.docIndex);
+  rules.forEach((rule, ruleIndex) => retrieve(rule, docRules).forEach((docIndex) => propose(ruleIndex, docIndex)));
+
+  // Second look at every proposed pair with only the two texts in view. Anything not confirmed
+  // is treated as enforced. A conflict is a serious claim, so it must be confirmed twice.
+  const list = [...proposals.values()];
+  const first = await judgePairs(list.map((p) => ({ ruleText: rules[p.ruleIndex]!.description, quote: docRules[p.docIndex]!.quote })), llm);
+  const conflicts = list.map((_, i) => i).filter((i) => first[i] === "conflict");
+  if (conflicts.length > 0) {
+    const again = await judgePairs(conflicts.map((i) => ({ ruleText: rules[list[i]!.ruleIndex]!.description, quote: docRules[list[i]!.docIndex]!.quote })), llm);
+    conflicts.forEach((i, j) => {
+      if (again[j] !== "conflict") first[i] = "no";
     });
   }
-  const matchedDocs = new Set([...byRule.values()].map((m) => m.docIndex));
+
+  // One tag per mined rule: a confirmed conflict wins, otherwise the closest confirmed match.
+  const byRule = new Map<number, { docIndex: number; relation: "same" | "conflict"; share: number }>();
+  list.forEach((p, i) => {
+    const verdict = first[i];
+    if (verdict !== "same" && verdict !== "conflict") return;
+    const d = docRules[p.docIndex]!;
+    const { share } = wordOverlap(rules[p.ruleIndex]!.description, `${d.description} ${d.quote}`);
+    const have = byRule.get(p.ruleIndex);
+    if (!have || (verdict === "conflict" && have.relation !== "conflict") || (verdict === have.relation && share > have.share)) {
+      byRule.set(p.ruleIndex, { docIndex: p.docIndex, relation: verdict, share });
+    }
+  });
+
+  const matchedDocs = new Set([...proposals.values()].filter((p, i) => first[i] === "same" || first[i] === "conflict").map((p) => p.docIndex));
   const tagged = rules.map((rule, i): Rule => {
     const m = byRule.get(i);
     if (!m) return { ...rule, origin: "enforced" };
     const d = docRules[m.docIndex]!;
     return { ...rule, origin: m.relation === "conflict" ? "conflict" : "both", docRefs: [{ path: d.path, quote: d.quote }] };
   });
-  return { rules: tagged, documentedOnly: docRules.filter((_, i) => !matchedDocs.has(i)) };
+  // "Written in the guide but not seen in review" must not list a rule that reviews do show,
+  // however the second look judged it: drop documented rules that restate a mined rule.
+  const restated = (d: DocRule) =>
+    rules.some((r) => {
+      const o = wordOverlap(r.description, d.description);
+      return o.share >= NEAR_IDENTICAL.share && o.shared >= NEAR_IDENTICAL.shared;
+    });
+  return { rules: tagged, documentedOnly: docRules.filter((d, i) => !matchedDocs.has(i) && !restated(d)) };
 }
