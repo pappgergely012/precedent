@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parseDiff } from "./diff.js";
 import { extractRules, isSingleReviewer } from "./extract.js";
@@ -7,11 +7,13 @@ import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js"
 import { anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
+import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
 import { summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
   precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--verify]
+  precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer]
   precedent stability <owner/repo> [--runs N] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
@@ -28,6 +30,10 @@ const { positionals, values } = parseArgs({
     verify: { type: "boolean" },
     "max-pages": { type: "string" },
     runs: { type: "string" },
+    format: { type: "string" },
+    "min-confidence": { type: "string" },
+    "max-rules": { type: "string" },
+    "include-single-reviewer": { type: "boolean" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
     "max-age-days": { type: "string" },
@@ -96,6 +102,28 @@ async function main(): Promise<void> {
     if (values.out) {
       await writeRulesFile(values.out, repo, rules);
       console.log(`\nWrote ${rules.length} rules to ${values.out}`);
+    }
+  } else if (command === "export") {
+    const format = values.format;
+    if (format !== "claude" && format !== "agents" && format !== "cursor") fail("--format must be one of: claude, agents, cursor.");
+    const rulesPath = values.rules ?? DEFAULT_RULES_FILE;
+    const file = await readRulesFile(rulesPath).catch((error: NodeJS.ErrnoException) =>
+      fail(error.code === "ENOENT" ? `Rules file ${rulesPath} not found. Run "precedent mine owner/repo --out ${rulesPath}" first.` : `Cannot read ${rulesPath}: ${error.message.split("\n")[0]}`),
+    );
+    const minConfidence = values["min-confidence"] === undefined ? undefined : Number(values["min-confidence"]);
+    if (minConfidence !== undefined && !(minConfidence >= 0 && minConfidence <= 1)) fail("--min-confidence needs a number between 0 and 1.");
+    const block = renderBlock(file, {
+      format: format as ExportFormat,
+      minConfidence,
+      maxRules: values["max-rules"] === undefined ? undefined : intFlag("max-rules", 30),
+      includeSingleReviewer: values["include-single-reviewer"],
+    });
+    if (!values.out) {
+      console.log(block);
+    } else {
+      const existing = await readFile(values.out, "utf8").catch(() => undefined);
+      await writeFile(values.out, applyBlock(existing, block));
+      console.log(`Wrote the rules block to ${values.out}`);
     }
   } else if (command === "stability" && repo) {
     requireAnthropicKey();
