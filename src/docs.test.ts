@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractDocRules, fetchGuideDocs, isPointer, reconcileRules, type DocRule } from "./docs.js";
+import { extractDocRules, fetchGuideDocs, isPointer, reconcileRules, selectGuidePaths, type DocRule } from "./docs.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -13,6 +13,7 @@ describe("fetchGuideDocs", () => {
     const seen: string[] = [];
     const fetchImpl = ((url: string, init: RequestInit) => {
       seen.push(url);
+      if (url.includes("/git/trees/")) return Promise.resolve(new Response("Not Found", { status: 404 }));
       expect((init.headers as Record<string, string>).Accept).toBe("application/vnd.github.raw+json");
       if (url === "https://api.github.com/repos/o/r/contents/CONTRIBUTING.md") return Promise.resolve(new Response("x".repeat(40_000)));
       if (url === "https://api.github.com/repos/o/r/contents/AGENTS.md") return Promise.resolve(new Response("Use pnpm."));
@@ -22,7 +23,57 @@ describe("fetchGuideDocs", () => {
     const docs = await fetchGuideDocs("o/r", { fetchImpl });
     expect(docs.map((d) => d.path)).toEqual(["CONTRIBUTING.md", "AGENTS.md"]);
     expect(docs[0]!.text).toHaveLength(30_000);
-    expect(seen[0]).toBe("https://api.github.com/repos/o/r/contents/CONTRIBUTING.md");
+    expect(seen[1]).toBe("https://api.github.com/repos/o/r/contents/CONTRIBUTING.md");
+  });
+
+  it("finds guides by scanning the repository tree and reads only those", async () => {
+    const tree = { tree: [
+      { path: "README.md", type: "blob", size: 100 },
+      { path: "CONTRIBUTING.md", type: "blob", size: 100 },
+      { path: "guides/source/contributing_to_ruby_on_rails.md", type: "blob", size: 5000 },
+      { path: "src/index.ts", type: "blob", size: 100 },
+    ] };
+    const fetched: string[] = [];
+    const fetchImpl = ((url: string) => {
+      if (url.includes("/git/trees/")) return Promise.resolve(new Response(JSON.stringify(tree)));
+      fetched.push(url.split("/contents/")[1]!);
+      return Promise.resolve(new Response("Write tests that fail without the change."));
+    }) as unknown as typeof fetch;
+    const docs = await fetchGuideDocs("o/r", { fetchImpl });
+    expect(docs.map((d) => d.path)).toEqual(["CONTRIBUTING.md", "guides/source/contributing_to_ruby_on_rails.md"]);
+    expect(fetched).toEqual(["CONTRIBUTING.md", "guides/source/contributing_to_ruby_on_rails.md"]);
+  });
+});
+
+describe("selectGuidePaths", () => {
+  const blob = (path: string, size = 1000) => ({ path, type: "blob", size });
+
+  it("always takes the root guides, then ranks topical documents and skips noise", () => {
+    const tree = [
+      blob("AGENTS.md"),
+      blob(".github/PULL_REQUEST_TEMPLATE.md"),
+      blob("docs/internals/contributing/writing-code/coding-style.txt"),
+      blob("docs/internals/contributing/writing-code/submitting-patches.txt"),
+      blob("docs/internals/contributing/triaging-tickets.txt"),
+      blob("docs/releases/5.0.txt"),
+      blob("tests/contributing/fixture.md"),
+      blob("docs/ref/models.txt"),
+      blob("docs/huge-contributing-notes.md", 500_000),
+      blob("src/contributing.ts"),
+      { path: "docs/internals", type: "tree" },
+    ];
+    expect(selectGuidePaths(tree)).toEqual([
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      "AGENTS.md",
+      "docs/internals/contributing/writing-code/coding-style.txt",
+      "docs/internals/contributing/writing-code/submitting-patches.txt",
+      "docs/internals/contributing/triaging-tickets.txt",
+    ]);
+  });
+
+  it("caps the number of files", () => {
+    const tree = Array.from({ length: 30 }, (_, i) => blob(`docs/contributing/guide-${i}.md`));
+    expect(selectGuidePaths(tree, 5)).toHaveLength(5);
   });
 });
 
