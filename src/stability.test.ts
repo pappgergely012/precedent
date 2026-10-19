@@ -77,7 +77,7 @@ describe("stabilityCuts", () => {
   it("recognises core rules", () => {
     expect(isCoreRule(r("a", [1, 2, 3]))).toBe(true);
     expect(isCoreRule(r("b", [1, 2]))).toBe(false);
-    expect(isCoreRule(r("c", [1, 2], 0.6))).toBe(true);
+    expect(isCoreRule(r("c", [1, 2], 0.6))).toBe(false); // confidence alone does not make a rule core
     expect(isCoreRule({ ...r("d", [1, 2, 3]), sources: sourcesFor([1, 2, 3], ["anna"]) })).toBe(false);
   });
 

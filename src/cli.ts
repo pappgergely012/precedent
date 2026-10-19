@@ -10,13 +10,14 @@ import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
+import { renderMineOutput } from "./mineoutput.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs]
-  precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer]
-  precedent stability <owner/repo> [--runs N] [--top N] [--pin-extraction] [--out FILE] [--max-comments N]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs] [--all]
+  precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
+  precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -40,6 +41,9 @@ const { positionals, values } = parseArgs({
     "min-confidence": { type: "string" },
     "max-rules": { type: "string" },
     "include-single-reviewer": { type: "boolean" },
+    "include-emerging": { type: "boolean" },
+    all: { type: "boolean" },
+    verbose: { type: "boolean" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
     "max-age-days": { type: "string" },
@@ -66,6 +70,11 @@ function requireAnthropicKey(): void {
     fail("Set PRECEDENT_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY).");
   }
 }
+
+/** Stage summaries of one stability run: which step changes from run to run. */
+const stageLog = (run: number) => (message: string) => {
+  if (/^(\d+ candidate rules|Merged into|Kept \d+|Dropped|Merged \d+ near|Merge level)/.test(message)) console.log(`  run ${run}: ${message}`);
+};
 
 const progress = (message: string) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${message}`);
 
@@ -107,22 +116,7 @@ async function main(): Promise<void> {
         progress(`${docRules.length} documented rules; ${rules.filter((r) => r.origin === "both").length} also enforced, ${rules.filter((r) => r.origin === "conflict").length} possible conflicts`);
       }
     }
-    if (rules.length === 0) {
-      console.log("No recurring rules found.");
-    }
-    const TOP = 10;
-    if (rules.length > TOP) console.log(`Showing the top ${TOP} of ${rules.length} rules.`);
-    rules.slice(0, TOP).forEach((rule, i) => {
-      const scope = rule.scope.length ? ` (${rule.scope.join(", ")})` : "";
-      console.log(`\n${i + 1}. ${rule.description}${scope}`);
-      const flag = isSingleReviewer(rule) ? ", single reviewer" : "";
-      console.log(`   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`);
-      for (const s of rule.sources.slice(0, 3)) console.log(`   - #${s.prNumber} @${s.reviewer} ${s.commentUrl}`);
-      const ref = rule.docRefs?.[0];
-      if (rule.origin === "both" && ref) console.log(`   documented in ${ref.path}: "${ref.quote.slice(0, 120)}"`);
-      else if (rule.origin === "conflict" && ref) console.log(`   POSSIBLE CONFLICT with ${ref.path}: "${ref.quote.slice(0, 120)}"`);
-      else if (rule.origin === "enforced") console.log("   enforced in reviews, not written in the guide");
-    });
+    for (const line of renderMineOutput(rules, { all: values.all, top: 10 })) console.log(line);
     if (documentedOnly && documentedOnly.length > 0) {
       console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
       for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
@@ -149,6 +143,7 @@ async function main(): Promise<void> {
       minConfidence,
       maxRules: values["max-rules"] === undefined ? undefined : intFlag("max-rules", 30),
       includeSingleReviewer: values["include-single-reviewer"],
+      includeEmerging: values["include-emerging"],
     });
     if (!values.out) {
       console.log(block);
@@ -169,7 +164,7 @@ async function main(): Promise<void> {
     const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), cache: pinned }));
+      results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
     const cuts = stabilityCuts(results, top);

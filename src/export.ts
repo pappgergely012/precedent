@@ -1,4 +1,4 @@
-import type { Rule } from "./rule.js";
+import { ruleTier, type Rule } from "./rule.js";
 import type { RulesFile } from "./rulesfile.js";
 
 export type ExportFormat = "claude" | "agents" | "cursor";
@@ -10,6 +10,8 @@ export interface ExportOptions {
   maxRules?: number;
   /** Rules asked for by one reviewer only are left out unless this is set. */
   includeSingleReviewer?: boolean;
+  /** Only core rules (3+ comments from 2+ reviewers) are exported unless this is set. */
+  includeEmerging?: boolean;
 }
 
 export const START_MARKER = "<!-- precedent:start";
@@ -21,9 +23,9 @@ const reviewers = (r: Rule) => new Set(r.sources.map((s) => s.reviewer)).size;
 
 /** Rules worth handing to an agent, best first. */
 export function selectRules(rules: Rule[], opts: ExportOptions): Rule[] {
-  const { minConfidence = 0.4, maxRules = 30, includeSingleReviewer = false } = opts;
+  const { minConfidence = 0.4, maxRules = 30, includeSingleReviewer = false, includeEmerging = false } = opts;
   return rules
-    .filter((r) => r.confidence >= minConfidence && (includeSingleReviewer || reviewers(r) >= 2))
+    .filter((r) => r.confidence >= minConfidence && (includeSingleReviewer || reviewers(r) >= 2) && (includeEmerging || ruleTier(r) === "core"))
     .sort((a, b) => b.confidence - a.confidence || distinctPrs(b) - distinctPrs(a) || a.description.localeCompare(b.description))
     .slice(0, maxRules);
 }
