@@ -2,6 +2,37 @@ import { z } from "zod";
 
 const API = "https://api.github.com";
 
+const RETRYABLE = new Set([502, 503, 504]);
+
+export interface RetryOptions {
+  /** Retries after the first attempt. */
+  retries?: number;
+  /** Injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * GET with retries for transient failures (502/503/504 and network errors), waiting
+ * 1s, 2s, 4s... between attempts. Only for idempotent requests: never wrap a POST.
+ */
+export async function fetchWithRetry(
+  doFetch: typeof fetch,
+  url: string,
+  init: RequestInit,
+  opts: RetryOptions = {},
+): Promise<Response> {
+  const { retries = 3, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = opts;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await doFetch(url, init);
+      if (!RETRYABLE.has(res.status) || attempt >= retries) return res;
+    } catch (error) {
+      if (attempt >= retries) throw error;
+    }
+    await sleep(1000 * 2 ** attempt);
+  }
+}
+
 /** A failed GitHub API call, with a message that is safe to show a user as is. */
 export class GitHubApiError extends Error {
   constructor(
@@ -95,6 +126,8 @@ export interface FetchOptions {
   /** Only comments created after this ISO timestamp. */
   since?: string;
   fetchImpl?: typeof fetch;
+  /** Backoff between retries of transient failures; injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** Review bots often run as regular user accounts, so the account type alone is not enough. */
@@ -135,7 +168,7 @@ export async function fetchReviewComments(
     });
     if (opts.since) params.set("since", opts.since);
 
-    const res = await doFetch(`${API}/repos/${repo}/pulls/comments?${params}`, { headers });
+    const res = await fetchWithRetry(doFetch, `${API}/repos/${repo}/pulls/comments?${params}`, { headers }, { sleep: opts.sleep });
     if (!res.ok) throw await githubApiError(res, `Repository ${repo}`);
     const items = z.array(ApiCommentSchema).parse(await res.json());
 
@@ -165,6 +198,7 @@ export async function fetchReviewComments(
 export interface PullRequestOptions {
   token?: string;
   fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 function checkRepo(repo: string): void {
@@ -183,9 +217,12 @@ function apiHeaders(token: string | undefined, accept: string): Record<string, s
 export async function fetchPullDiff(repo: string, prNumber: number, opts: PullRequestOptions = {}): Promise<string> {
   checkRepo(repo);
   const doFetch = opts.fetchImpl ?? fetch;
-  const res = await doFetch(`${API}/repos/${repo}/pulls/${prNumber}`, {
-    headers: apiHeaders(opts.token, "application/vnd.github.diff"),
-  });
+  const res = await fetchWithRetry(
+    doFetch,
+    `${API}/repos/${repo}/pulls/${prNumber}`,
+    { headers: apiHeaders(opts.token, "application/vnd.github.diff") },
+    { sleep: opts.sleep },
+  );
   if (!res.ok) throw await githubApiError(res, `Pull request ${repo}#${prNumber}`);
   return res.text();
 }

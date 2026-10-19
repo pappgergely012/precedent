@@ -48,6 +48,6 @@ describe("verifyRules", () => {
 
   it("treats network errors as unverified", async () => {
     const fetchImpl = (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch;
-    expect(await verifyRules("o/r", [rule([source(1, 10), source(2, 11)])], { fetchImpl })).toEqual([]);
+    expect(await verifyRules("o/r", [rule([source(1, 10), source(2, 11)])], { fetchImpl, sleep: async () => {} })).toEqual([]);
   });
 });

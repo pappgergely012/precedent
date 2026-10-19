@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubApiError, fetchReviewComments } from "./github.js";
+import { GitHubApiError, fetchReviewComments, fetchWithRetry } from "./github.js";
 
 const comment = (id: number, login: string, type = "User") => ({
   id,
@@ -99,5 +99,61 @@ describe("GitHub API errors", () => {
   it("does not leak raw JSON for unexpected statuses", async () => {
     const err = await fetchReviewComments("o/r", { fetchImpl: respond(500, { message: "Server Error", documentation_url: "x" }) }).catch((e) => e);
     expect(err.message).toBe("GitHub API 500 reading Repository o/r: Server Error");
+  });
+});
+
+describe("fetchWithRetry", () => {
+  const noSleep = () => Promise.resolve();
+  const sequence = (...steps: (number | Error)[]) => {
+    let i = 0;
+    const calls = { n: 0 };
+    const impl = (() => {
+      calls.n++;
+      const step = steps[Math.min(i++, steps.length - 1)]!;
+      return step instanceof Error ? Promise.reject(step) : Promise.resolve(new Response("{}", { status: step }));
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  };
+
+  it("retries 502/503/504 and returns the first good response", async () => {
+    const { impl, calls } = sequence(502, 503, 200);
+    const res = await fetchWithRetry(impl, "u", {}, { sleep: noSleep });
+    expect(res.status).toBe(200);
+    expect(calls.n).toBe(3);
+  });
+
+  it("retries network errors", async () => {
+    const { impl, calls } = sequence(new Error("socket hang up"), 200);
+    expect((await fetchWithRetry(impl, "u", {}, { sleep: noSleep })).status).toBe(200);
+    expect(calls.n).toBe(2);
+  });
+
+  it("returns the last bad response after exhausting retries, and throws the last network error", async () => {
+    const bad = sequence(502);
+    expect((await fetchWithRetry(bad.impl, "u", {}, { sleep: noSleep, retries: 2 })).status).toBe(502);
+    expect(bad.calls.n).toBe(3);
+    const down = sequence(new Error("offline"));
+    await expect(fetchWithRetry(down.impl, "u", {}, { sleep: noSleep, retries: 1 })).rejects.toThrow("offline");
+  });
+
+  it("does not retry client errors or rate limits", async () => {
+    for (const status of [401, 404, 403, 429]) {
+      const { impl, calls } = sequence(status, 200);
+      expect((await fetchWithRetry(impl, "u", {}, { sleep: noSleep })).status).toBe(status);
+      expect(calls.n).toBe(1);
+    }
+  });
+
+  it("backs off 1s, 2s, 4s", async () => {
+    const waits: number[] = [];
+    const { impl } = sequence(502, 502, 502, 200);
+    await fetchWithRetry(impl, "u", {}, { sleep: async (ms) => void waits.push(ms) });
+    expect(waits).toEqual([1000, 2000, 4000]);
+  });
+
+  it("mine surfaces a persistent 502 as a one-line error", async () => {
+    const fetchImpl = (() => Promise.resolve(new Response('{"message":"Server Error"}', { status: 502 }))) as typeof fetch;
+    const err = await fetchReviewComments("o/r", { fetchImpl, sleep: noSleep }).catch((e) => e);
+    expect(err.message).toBe("GitHub API 502 reading Repository o/r: Server Error");
   });
 });
