@@ -33,7 +33,7 @@ describe("cli errors", () => {
 describe("cli export", () => {
   const rulesFile = (dir: string) => {
     const path = join(dir, "rules.json");
-    const sources = [1, 2].map((n) => ({ prNumber: n, reviewer: n === 1 ? "anna" : "bob", commentUrl: `https://github.com/o/r/pull/${n}#discussion_r${n}` }));
+    const sources = [1, 2, 3].map((n) => ({ prNumber: n, reviewer: n === 2 ? "bob" : "anna", commentUrl: `https://github.com/o/r/pull/${n}#discussion_r${n}` }));
     writeFileSync(path, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-19T00:00:00.000Z", rules: [{ id: "r1", description: "Use gate() in tests.", scope: [], confidence: 0.4, sources }] }));
     return path;
   };

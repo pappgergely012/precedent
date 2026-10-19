@@ -1,4 +1,4 @@
-import type { Rule } from "./rule.js";
+import { ruleTier, type Rule } from "./rule.js";
 
 const STOP = new Set(["a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "when", "with", "that", "is", "are", "be", "use", "do", "not"]);
 
@@ -117,9 +117,8 @@ export function summarizeStability(allRuns: Rule[][], topN = 0): StabilitySummar
   };
 }
 
-/** A rule worth relying on: well supported by several comments and reviewers (or very confident). */
-export const isCoreRule = (r: Rule): boolean =>
-  (r.sources.length >= 3 && new Set(r.sources.map((s) => s.reviewer)).size >= 2) || r.confidence >= 0.6;
+/** A rule worth relying on: see `ruleTier`. */
+export const isCoreRule = (r: Rule): boolean => ruleTier(r) === "core";
 
 export interface CutStability {
   /** Rules per run in this cut. */

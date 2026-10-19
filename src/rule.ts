@@ -30,3 +30,18 @@ export const RuleSchema = z.object({
 });
 
 export type Rule = z.infer<typeof RuleSchema>;
+
+/**
+ * How far a rule can be relied on. "core": several comments from several reviewers asked for it,
+ * the part of the output that comes back run after run. "emerging": everything else, rules
+ * that may be real but rest on thinner evidence and are the first to change on a re-mine.
+ */
+export type RuleTier = "core" | "emerging";
+
+export const CORE_MIN_COMMENTS = 3;
+export const CORE_MIN_REVIEWERS = 2;
+
+export function ruleTier(rule: Pick<Rule, "sources">): RuleTier {
+  const reviewers = new Set(rule.sources.map((s) => s.reviewer)).size;
+  return rule.sources.length >= CORE_MIN_COMMENTS && reviewers >= CORE_MIN_REVIEWERS ? "core" : "emerging";
+}
