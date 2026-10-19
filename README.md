@@ -23,3 +23,7 @@ pnpm test
 ```
 
 Written in TypeScript (strict mode).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

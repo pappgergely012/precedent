@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "Learn a team's unwritten code review rules from past pull requests.",
   "type": "module",
+  "license": "Apache-2.0",
   "private": true,
   "engines": {
     "node": ">=22"
