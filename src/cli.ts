@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parseDiff } from "./diff.js";
-import { extractRules } from "./extract.js";
+import { extractRules, isSingleReviewer } from "./extract.js";
 import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
 import { anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
@@ -10,7 +10,7 @@ import { formatComment, reviewDiff } from "./review.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--verify]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--verify]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -27,6 +27,7 @@ const { positionals, values } = parseArgs({
     "max-pages": { type: "string" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
+    "max-age-days": { type: "string" },
   },
 });
 const [command, repo, prArg] = positionals;
@@ -65,6 +66,7 @@ if (command === "mine" && repo) {
   let rules = await extractRules(comments, anthropicLlm(), {
     maxComments: intFlag("max-comments", 1000),
     minOccurrences: intFlag("min-occurrences", 2),
+    maxAgeDays: intFlag("max-age-days", 730),
     onProgress: progress,
   });
   if (values.verify) {
@@ -80,7 +82,8 @@ if (command === "mine" && repo) {
   rules.slice(0, TOP).forEach((rule, i) => {
     const scope = rule.scope.length ? ` (${rule.scope.join(", ")})` : "";
     console.log(`\n${i + 1}. ${rule.description}${scope}`);
-    console.log(`   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments:`);
+    const flag = isSingleReviewer(rule) ? ", single reviewer" : "";
+    console.log(`   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`);
     for (const s of rule.sources.slice(0, 3)) console.log(`   - #${s.prNumber} @${s.reviewer} ${s.commentUrl}`);
   });
   if (values.out) {
