@@ -39,6 +39,23 @@ describe("fetchReviewComments", () => {
     expect(result).toHaveLength(101);
   });
 
+  it("builds citation urls from the requested repo, not the API html_url", async () => {
+    const fetchImpl = (() => json([comment(5, "anna")])) as typeof fetch;
+    const [c] = await fetchReviewComments("owner/name", { fetchImpl });
+    expect(c!.url).toBe("https://github.com/owner/name/pull/42#discussion_r5");
+  });
+
+  it("keeps paging past maxPages until enough top-level comments are found", async () => {
+    const reply = (id: number) => ({ ...comment(id, "anna"), in_reply_to_id: 1 });
+    const page = (start: number, top: boolean) =>
+      Array.from({ length: 100 }, (_, i) => (top ? comment(start + i, "anna") : reply(start + i)));
+    let calls = 0;
+    const fetchImpl = (() => json(++calls <= 2 ? page(calls * 1000, false) : page(calls * 1000, true))) as typeof fetch;
+    const result = await fetchReviewComments("o/r", { fetchImpl, maxPages: 2, minTopLevel: 100 });
+    expect(calls).toBe(3);
+    expect(result).toHaveLength(300);
+  });
+
   it("rejects an invalid repo name", async () => {
     await expect(fetchReviewComments("not-a-repo")).rejects.toThrow("Invalid repo");
   });

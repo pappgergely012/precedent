@@ -10,6 +10,20 @@ export interface Llm {
   parse<S extends z.ZodTypeAny>(prompt: string, schema: S): Promise<z.infer<S>>;
 }
 
+/** Retry a flaky call (malformed structured output, transient API errors) a few times. */
+export async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (error instanceof Error && error.message.includes("declined")) throw error;
+    }
+  }
+  throw lastError;
+}
+
 export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Llm {
   // Pin the base URL: ANTHROPIC_BASE_URL may point at an unrelated proxy
   // (for example inside a managed sandbox) that does not accept our key.
@@ -21,20 +35,24 @@ export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Ll
   const model = opts.model ?? process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
 
   return {
-    async parse(prompt, schema) {
-      const response = await client.messages.parse({
-        model,
-        max_tokens: 16000,
-        messages: [{ role: "user", content: prompt }],
-        output_config: { effort: "low", format: zodOutputFormat(schema) },
+    parse(prompt, schema) {
+      return withRetry(async () => {
+        const response = await client.messages.parse({
+          model,
+          max_tokens: 16000,
+          // Extraction is a plain classification task; a leading thinking block breaks structured-output parsing.
+          thinking: { type: "disabled" },
+          messages: [{ role: "user", content: prompt }],
+          output_config: { effort: "low", format: zodOutputFormat(schema) },
+        });
+        if (response.stop_reason === "refusal") {
+          throw new Error("The model declined to process this request");
+        }
+        if (response.parsed_output == null) {
+          throw new Error(`Model output did not match the schema (stop_reason: ${response.stop_reason})`);
+        }
+        return response.parsed_output;
       });
-      if (response.stop_reason === "refusal") {
-        throw new Error("The model declined to process this request");
-      }
-      if (response.parsed_output == null) {
-        throw new Error(`Model output did not match the schema (stop_reason: ${response.stop_reason})`);
-      }
-      return response.parsed_output;
     },
   };
 }

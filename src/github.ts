@@ -34,6 +34,13 @@ export interface FetchOptions {
   token?: string;
   /** Stop after this many pages of 100 comments. */
   maxPages?: number;
+  /**
+   * Keep paging past `maxPages` (up to `hardMaxPages`) until this many top-level
+   * (non-reply) comments are collected. Repos with heavy threaded replies
+   * would otherwise yield too few comments to mine.
+   */
+  minTopLevel?: number;
+  hardMaxPages?: number;
   /** Only comments created after this ISO timestamp. */
   since?: string;
   fetchImpl?: typeof fetch;
@@ -57,6 +64,8 @@ export async function fetchReviewComments(
   }
   const doFetch = opts.fetchImpl ?? fetch;
   const maxPages = opts.maxPages ?? 10;
+  const hardMaxPages = Math.max(maxPages, opts.hardMaxPages ?? 30);
+  const minTopLevel = opts.minTopLevel ?? 300;
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -64,7 +73,9 @@ export async function fetchReviewComments(
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
 
   const comments: ReviewComment[] = [];
-  for (let page = 1; page <= maxPages; page++) {
+  let topLevel = 0;
+  for (let page = 1; page <= hardMaxPages; page++) {
+    if (page > maxPages && topLevel >= minTopLevel) break;
     const params = new URLSearchParams({
       per_page: "100",
       page: String(page),
@@ -81,14 +92,17 @@ export async function fetchReviewComments(
 
     for (const c of items) {
       if (!c.user || isBot(c.user)) continue;
+      const prNumber = Number(c.pull_request_url.split("/").pop());
+      if (c.in_reply_to_id === undefined) topLevel++;
       comments.push({
         id: c.id,
-        prNumber: Number(c.pull_request_url.split("/").pop()),
+        prNumber,
         reviewer: c.user.login,
         body: c.body,
         path: c.path,
         diffHunk: c.diff_hunk,
-        url: c.html_url,
+        // Built from the requested repo: html_url can carry a stale or renamed owner.
+        url: `https://github.com/${repo}/pull/${prNumber}#discussion_r${c.id}`,
         createdAt: c.created_at,
         inReplyTo: c.in_reply_to_id,
       });
