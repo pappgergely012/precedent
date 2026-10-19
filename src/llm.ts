@@ -39,7 +39,7 @@ export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Ll
       return withRetry(async () => {
         const response = await client.messages.parse({
           model,
-          max_tokens: 8000,
+          max_tokens: 16000,
           // Extraction is a plain classification task; a leading thinking block breaks structured-output parsing.
           thinking: { type: "disabled" },
           messages: [{ role: "user", content: prompt }],

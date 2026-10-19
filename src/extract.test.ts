@@ -61,6 +61,15 @@ describe("extractRules", () => {
     expect(await extractRules([comment(1)], llm)).toEqual([]);
   });
 
+  it("drops rules whose comments all come from one pull request", async () => {
+    const llm = fakeLlm(
+      { items: [{ id: 1, principle: "Use named exports" }, { id: 2, principle: "Use named exports" }] },
+      { rules: [{ description: "Use named exports", scope: [], commentIds: [1, 2] }] },
+    );
+    const same = [comment(1, { prNumber: 7 }), comment(2, { prNumber: 7 })];
+    expect(await extractRules(same, llm)).toEqual([]);
+  });
+
   it("ignores ids the model made up", async () => {
     const llm = fakeLlm(
       { items: [{ id: 999, principle: "Invented" }] },

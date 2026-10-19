@@ -8,7 +8,7 @@ Precedent mines review comments and the changes that resolved them, turns recurr
 
 ## Planned
 
-- `precedent mine <owner/repo>`: print the top 10 rules found in a repository's PR history. Needs `GITHUB_TOKEN` and `PRECEDENT_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`). Uses `claude-haiku-5-5` by default (override with `PRECEDENT_MODEL`); roughly two small LLM calls per 40 comments, capped at the newest 200 comments.
+- `precedent mine <owner/repo>`: print the top 10 rules found in a repository's PR history. Needs `GITHUB_TOKEN` and `PRECEDENT_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`). Uses `claude-haiku-5-5` by default (override with `PRECEDENT_MODEL`); roughly one small LLM call per 40 comments, capped at the newest 600 comments.
 - A rule format (see `src/rule.ts`) that can be exported to `CLAUDE.md`, `.cursorrules` and lint configs.
 
 ## Development
