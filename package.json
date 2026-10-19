@@ -16,7 +16,8 @@
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "eval:docs": "tsx scripts/eval-docs.ts"
+    "eval:docs": "tsx scripts/eval-docs.ts",
+    "eval:docs:e2e": "tsx scripts/eval-docs-e2e.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

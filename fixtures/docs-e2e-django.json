@@ -1,0 +1,356 @@
+{
+ "note": "End-to-end fixture for `mine --docs`: a fixed set of mined rules plus the repository's own guide files (fetched live from GitHub), scored against hand labels. The mined rules are the 15 rules of one builder run on django/django (public review comments). The labels are the validator's check of that run (explicit labels: rules 1, 2, 6, 12, 14 are documented in the guide; rule 4 is a soft conflict with the guide's 'reserve ticket references for obscure issues'; rules 3 and 5 are partial and not scored). `implicit` lists rules the validator did not flag as misses, taken as correctly 'enforced'. Run with `pnpm eval:docs:e2e` (calls GitHub and the model).",
+ "repo": "django/django",
+ "rules": [
+  {
+   "id": "rule-1",
+   "description": "Add a versionadded or versionchanged annotation when documenting new features or behaviour changes.",
+   "scope": [
+    "docs/**"
+   ],
+   "confidence": 1,
+   "sources": [
+    {
+     "prNumber": 21636,
+     "commentUrl": "https://github.com/django/django/pull/21636#discussion_r3805807568",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 21736,
+     "commentUrl": "https://github.com/django/django/pull/21736#discussion_r3806867813",
+     "reviewer": "medmunds"
+    },
+    {
+     "prNumber": 16905,
+     "commentUrl": "https://github.com/django/django/pull/16905#discussion_r4080970490",
+     "reviewer": "shaib"
+    }
+   ]
+  },
+  {
+   "id": "rule-2",
+   "description": "Add a test covering each code path or behavior change that is introduced.",
+   "scope": [],
+   "confidence": 1,
+   "sources": [
+    {
+     "prNumber": 21610,
+     "commentUrl": "https://github.com/django/django/pull/21610#discussion_r4008377963",
+     "reviewer": "nessita"
+    },
+    {
+     "prNumber": 22018,
+     "commentUrl": "https://github.com/django/django/pull/22018#discussion_r4167099164",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 20469,
+     "commentUrl": "https://github.com/django/django/pull/20469#discussion_r3994275072",
+     "reviewer": "medmunds"
+    }
+   ]
+  },
+  {
+   "id": "rule-3",
+   "description": "Do not backport changes to stable release branches unless they qualify under the backport policy.",
+   "scope": [],
+   "confidence": 1,
+   "sources": [
+    {
+     "prNumber": 21877,
+     "commentUrl": "https://github.com/django/django/pull/21877#discussion_r3929031920",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 22030,
+     "commentUrl": "https://github.com/django/django/pull/22030#discussion_r4103812527",
+     "reviewer": "carltongibson"
+    },
+    {
+     "prNumber": 21698,
+     "commentUrl": "https://github.com/django/django/pull/21698#discussion_r3681758997",
+     "reviewer": "sarahboyce"
+    }
+   ]
+  },
+  {
+   "id": "rule-4",
+   "description": "Do not reference ticket numbers or ticket links in code comments, docstrings, or test comments; rely on git blame instead.",
+   "scope": [],
+   "confidence": 1,
+   "sources": [
+    {
+     "prNumber": 21329,
+     "commentUrl": "https://github.com/django/django/pull/21329#discussion_r3700185535",
+     "reviewer": "blighj"
+    },
+    {
+     "prNumber": 21629,
+     "commentUrl": "https://github.com/django/django/pull/21629#discussion_r3685722818",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 21169,
+     "commentUrl": "https://github.com/django/django/pull/21169#discussion_r3690252284",
+     "reviewer": "blighj"
+    }
+   ]
+  },
+  {
+   "id": "rule-5",
+   "description": "Keep documentation example and release-note changes in separate commits from code changes.",
+   "scope": [],
+   "confidence": 0.8,
+   "sources": [
+    {
+     "prNumber": 21596,
+     "commentUrl": "https://github.com/django/django/pull/21596#discussion_r3550575539",
+     "reviewer": "sarahboyce"
+    },
+    {
+     "prNumber": 21649,
+     "commentUrl": "https://github.com/django/django/pull/21649#discussion_r3618789913",
+     "reviewer": "timgraham"
+    },
+    {
+     "prNumber": 20548,
+     "commentUrl": "https://github.com/django/django/pull/20548#discussion_r3700252266",
+     "reviewer": "smithdc1"
+    }
+   ]
+  },
+  {
+   "id": "rule-6",
+   "description": "Mark deprecated code with a RemovedInDjangoXXWarning comment.",
+   "scope": [],
+   "confidence": 0.8,
+   "sources": [
+    {
+     "prNumber": 20469,
+     "commentUrl": "https://github.com/django/django/pull/20469#discussion_r3918574993",
+     "reviewer": "medmunds"
+    },
+    {
+     "prNumber": 21886,
+     "commentUrl": "https://github.com/django/django/pull/21886#discussion_r3931825838",
+     "reviewer": "carltongibson"
+    },
+    {
+     "prNumber": 21952,
+     "commentUrl": "https://github.com/django/django/pull/21952#discussion_r3996964375",
+     "reviewer": "medmunds"
+    }
+   ]
+  },
+  {
+   "id": "rule-7",
+   "description": "Gate GIS or database-specific test behavior on connection.features flags rather than hardcoded backend checks.",
+   "scope": [],
+   "confidence": 0.8,
+   "sources": [
+    {
+     "prNumber": 21649,
+     "commentUrl": "https://github.com/django/django/pull/21649#discussion_r3618786894",
+     "reviewer": "timgraham"
+    },
+    {
+     "prNumber": 21605,
+     "commentUrl": "https://github.com/django/django/pull/21605#discussion_r3578770810",
+     "reviewer": "timgraham"
+    },
+    {
+     "prNumber": 21724,
+     "commentUrl": "https://github.com/django/django/pull/21724#discussion_r3731879652",
+     "reviewer": "jacobtylerwalls"
+    }
+   ]
+  },
+  {
+   "id": "rule-8",
+   "description": "Write code comments as complete sentences starting with a capital letter and ending with a period.",
+   "scope": [],
+   "confidence": 0.6,
+   "sources": [
+    {
+     "prNumber": 21228,
+     "commentUrl": "https://github.com/django/django/pull/21228#discussion_r3634223463",
+     "reviewer": "medmunds"
+    },
+    {
+     "prNumber": 21596,
+     "commentUrl": "https://github.com/django/django/pull/21596#discussion_r3690084367",
+     "reviewer": "sarahboyce"
+    },
+    {
+     "prNumber": 21864,
+     "commentUrl": "https://github.com/django/django/pull/21864#discussion_r3906673260",
+     "reviewer": "cliffordgama"
+    }
+   ]
+  },
+  {
+   "id": "rule-9",
+   "description": "Use a loop over HTTP methods when a test checks the same assertions for multiple methods.",
+   "scope": [],
+   "confidence": 0.4,
+   "sources": [
+    {
+     "prNumber": 21855,
+     "commentUrl": "https://github.com/django/django/pull/21855#discussion_r3911676051",
+     "reviewer": "jonbiemond"
+    },
+    {
+     "prNumber": 21855,
+     "commentUrl": "https://github.com/django/django/pull/21855#discussion_r3911767581",
+     "reviewer": "jonbiemond"
+    },
+    {
+     "prNumber": 21737,
+     "commentUrl": "https://github.com/django/django/pull/21737#discussion_r3884088390",
+     "reviewer": "easherma"
+    }
+   ]
+  },
+  {
+   "id": "rule-10",
+   "description": "Use the Django concept of lookups or ORM rather than general database jargon in documentation.",
+   "scope": [],
+   "confidence": 0.4,
+   "sources": [
+    {
+     "prNumber": 21117,
+     "commentUrl": "https://github.com/django/django/pull/21117#discussion_r3840973809",
+     "reviewer": "smallsaucepan"
+    },
+    {
+     "prNumber": 21636,
+     "commentUrl": "https://github.com/django/django/pull/21636#discussion_r3882776255",
+     "reviewer": "LilyFirefly"
+    },
+    {
+     "prNumber": 21636,
+     "commentUrl": "https://github.com/django/django/pull/21636#discussion_r3882871125",
+     "reviewer": "LilyFirefly"
+    }
+   ]
+  },
+  {
+   "id": "rule-11",
+   "description": "Use the Django version naming convention \"Django N.M\" in documentation, not \"version N.M\".",
+   "scope": [],
+   "confidence": 0.4,
+   "sources": [
+    {
+     "prNumber": 21613,
+     "commentUrl": "https://github.com/django/django/pull/21613#discussion_r4018131429",
+     "reviewer": "nessita"
+    },
+    {
+     "prNumber": 21983,
+     "commentUrl": "https://github.com/django/django/pull/21983#discussion_r4038024933",
+     "reviewer": "jacobtylerwalls"
+    }
+   ]
+  },
+  {
+   "id": "rule-12",
+   "description": "Keep release notes for backwards-incompatible changes in the backwards incompatible section only.",
+   "scope": [],
+   "confidence": 0.4,
+   "sources": [
+    {
+     "prNumber": 20469,
+     "commentUrl": "https://github.com/django/django/pull/20469#discussion_r3916850580",
+     "reviewer": "medmunds"
+    },
+    {
+     "prNumber": 21843,
+     "commentUrl": "https://github.com/django/django/pull/21843#discussion_r4230290255",
+     "reviewer": "sarahboyce"
+    }
+   ]
+  },
+  {
+   "id": "rule-13",
+   "description": "Do not describe bugs in features newly added in the current release as regressions in release notes, and only call something a regression when it was introduced in the newest version.",
+   "scope": [],
+   "confidence": 0.4,
+   "sources": [
+    {
+     "prNumber": 21867,
+     "commentUrl": "https://github.com/django/django/pull/21867#discussion_r3906603202",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 21801,
+     "commentUrl": "https://github.com/django/django/pull/21801#discussion_r3813397908",
+     "reviewer": "cliffordgama"
+    }
+   ]
+  },
+  {
+   "id": "rule-14",
+   "description": "Avoid the bare word \"note\" in documentation.",
+   "scope": [],
+   "confidence": 0.2,
+   "sources": [
+    {
+     "prNumber": 21488,
+     "commentUrl": "https://github.com/django/django/pull/21488#discussion_r3927342628",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 21501,
+     "commentUrl": "https://github.com/django/django/pull/21501#discussion_r4046962992",
+     "reviewer": "jacobtylerwalls"
+    }
+   ]
+  },
+  {
+   "id": "rule-15",
+   "description": "Use list comprehensions instead of generator expressions when passing arguments to str.join.",
+   "scope": [],
+   "confidence": 0.2,
+   "sources": [
+    {
+     "prNumber": 21590,
+     "commentUrl": "https://github.com/django/django/pull/21590#discussion_r3538126594",
+     "reviewer": "jacobtylerwalls"
+    },
+    {
+     "prNumber": 21636,
+     "commentUrl": "https://github.com/django/django/pull/21636#discussion_r3762898537",
+     "reviewer": "jacobtylerwalls"
+    }
+   ]
+  }
+ ],
+ "expected": {
+  "rule-1": "both",
+  "rule-2": "both",
+  "rule-4": "conflict",
+  "rule-6": "both",
+  "rule-12": "both",
+  "rule-14": "both",
+  "rule-7": "enforced",
+  "rule-8": "enforced",
+  "rule-9": "enforced",
+  "rule-10": "enforced",
+  "rule-11": "enforced",
+  "rule-13": "enforced",
+  "rule-15": "enforced"
+ },
+ "unscored": [
+  "rule-3",
+  "rule-5"
+ ],
+ "implicit": [
+  "rule-7",
+  "rule-8",
+  "rule-9",
+  "rule-10",
+  "rule-11",
+  "rule-13",
+  "rule-15"
+ ]
+}
