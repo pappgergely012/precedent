@@ -18,7 +18,9 @@ if (command === "mine" && repo) {
   if (rules.length === 0) {
     console.log("No recurring rules found.");
   }
-  rules.forEach((rule, i) => {
+  const TOP = 10;
+  if (rules.length > TOP) console.log(`Showing the top ${TOP} of ${rules.length} rules.`);
+  rules.slice(0, TOP).forEach((rule, i) => {
     const scope = rule.scope.length ? ` (${rule.scope.join(", ")})` : "";
     console.log(`\n${i + 1}. ${rule.description}${scope}`);
     console.log(`   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments:`);
