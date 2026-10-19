@@ -2,7 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parseDiff } from "./diff.js";
-import { commentText, extractRules, isSingleReviewer, selectUsable } from "./extract.js";
+import { cacheText, extractRules, isSingleReviewer, selectUsable } from "./extract.js";
 import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
 import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
@@ -18,9 +18,9 @@ import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--dry-run] [--verify] [--docs] [--all]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
-  precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
+  precedent stability <owner/repo> [--runs N] [--extraction-votes N] [--shared-merge X] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -55,6 +55,8 @@ const OPTIONS = {
   all: { type: "boolean" },
   redact: { type: "boolean" },
   "pre-merge": { type: "boolean" },
+  "extraction-votes": { type: "string" },
+  "shared-merge": { type: "string" },
   "dry-run": { type: "boolean" },
   verbose: { type: "boolean" },
   "max-comments": { type: "string" },
@@ -67,6 +69,15 @@ const [command, repo, prArg] = positionals;
 function fail(message: string): never {
   console.error(message);
   process.exit(1);
+}
+
+/** `--shared-merge X`: a share between 0 (exclusive) and 1, or the default. */
+function sharedMergeFlag(): number | undefined {
+  const raw = values["shared-merge"];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!(value > 0 && value <= 1)) fail("--shared-merge needs a number above 0 and up to 1.");
+  return value;
 }
 
 /** Read `--name <positive integer>`, or use the fallback when the flag is absent. */
@@ -121,8 +132,9 @@ async function main(): Promise<void> {
     if (values["dry-run"]) {
       const usable = selectUsable(comments, { maxComments: intFlag("max-comments", 1000), maxAgeDays: intFlag("max-age-days", 730) });
       const cache = values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
-      const pending = cache ? usable.filter((c) => cache.get(c.id, commentText(c)) === undefined).length : usable.length;
-      for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending }), usable.length, 1)) console.log(line);
+      const votes = intFlag("extraction-votes", 1);
+      const pending = cache ? usable.filter((c) => cache.get(c.id, cacheText(c, votes)) === undefined).length : usable.length;
+      for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending, votes }), usable.length, votes)) console.log(line);
       return;
     }
 
@@ -137,6 +149,8 @@ async function main(): Promise<void> {
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
       preMerge: values["pre-merge"],
+      extractionVotes: intFlag("extraction-votes", 1),
+      sharedMergeThreshold: sharedMergeFlag(),
       cache: mineCache,
       onProgress: progress,
     });
@@ -231,7 +245,7 @@ async function main(): Promise<void> {
     const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(sendableComments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
+      results.push(await extractRules(sendableComments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], extractionVotes: intFlag("extraction-votes", 1), sharedMergeThreshold: sharedMergeFlag(), cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
     const cuts = stabilityCuts(results, top);
