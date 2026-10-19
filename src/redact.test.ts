@@ -89,4 +89,36 @@ describe("createRedactor at the prompt boundary", () => {
     expect(prompts[0]).toContain(secret);
     expect(off.line()).toBeUndefined();
   });
+
+  it("masks Stripe, Google, npm and AWS secret key formats found by QA", () => {
+    // Built from parts so this file never contains a literal that secret scanners flag.
+    const cases = [
+      "STRIPE=" + ["sk", "live", "51H8abcdefghijklmnopqrstuvwxyz"].join("_"),
+      ["sk", "test", "4eC39HqLyjWDarjtT1zdp7dc"].join("_"),
+      ["rk", "live", "51H8abcdefghijklmnopqrstuvwxyz"].join("_"),
+      ["AIza", "SyA1234567890abcdefghijklmnopqrstuv"].join(""),
+      "//registry.npmjs.org/:_authToken=" + ["npm", "abcdefghijklmnopqrstuvwxyz0123456789"].join("_"),
+      ["wJalrXUtnFEMI", "K7MDENG", "bPxRfiCYEXAMPLEKEY"].join("/"),
+      "aws_secret_access_key = " + ["wJalrXUtnFEMI", "K7MDENG", "bPxRfiCYEXAMPLEKEY"].join("/"),
+    ];
+    for (const text of cases) {
+      const out = r(text).text;
+      expect(out, text).toContain("[REDACTED:");
+      expect(out, text).not.toMatch(/sk_live_51H8abc|sk_test_4eC|AIzaSyA1234|npm_abcdef|wJalrXUtn/);
+    }
+  });
+
+  it("does not mangle code that merely assigns a secret-named variable", () => {
+    for (const text of [
+      "api_key = get_api_key_from_environment_variable()",
+      "token = request_session_token_value_for_user()",
+      "secret = settings.secrets[name_of_the_secret_entry]",
+      "see commit 9fceb02d0ae598e95dc970b74767f19372d61af8 and 123e4567-e89b-12d3-a456-426614174000",
+      "const apiKey = loadApiKeyFromVaultSomehow(env);",
+      "token = request_session_token_value_for_user",
+    ]) {
+      expect(r(text).text, text).toBe(text);
+    }
+    expect(r('password = "correcthorsebatterystaple"').text).toBe('password = "[REDACTED:secret]"');
+  });
 });
