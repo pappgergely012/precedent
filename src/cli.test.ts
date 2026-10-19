@@ -96,3 +96,14 @@ describe("cli export", () => {
     expect(bad.stderr).toContain("--format must be one of");
   });
 });
+
+describe("cli early validation of mine flags", () => {
+  it("rejects --cache together with --no-cache before fetching anything, also for a dry run", () => {
+    for (const extra of [[], ["--dry-run"]]) {
+      const r = run(["mine", "o/r", "--cache", "c.json", "--no-cache", ...extra]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("--cache and --no-cache cannot be used together.");
+      expect(r.stdout).not.toContain("Fetched");
+    }
+  });
+});

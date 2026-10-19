@@ -105,6 +105,7 @@ const progress = (message: string) => console.log(`[${new Date().toISOString().s
 
 async function main(): Promise<void> {
   if (command === "mine" && repo) {
+    if (values.cache && values["no-cache"]) fail("--cache and --no-cache cannot be used together.");
     if (!values["dry-run"]) requireAnthropicKey();
     if (!process.env.GITHUB_TOKEN) {
       console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour and mining a large repository will hit the limit.");
