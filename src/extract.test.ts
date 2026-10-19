@@ -375,3 +375,22 @@ describe("pre-merge of near-identical candidates", () => {
     expect(merged).toEqual([{ description: "Both conventions", scope: [], commentIds: [10, 11] }]);
   });
 });
+
+describe("extractRules with a recorded model", () => {
+  it("re-mining the same data replays every stage and returns identical rules", async () => {
+    const { cachedLlm, memoryStore, replayLlm } = await import("./llmcache.js");
+    const answers = [
+      { items: [{ id: 1, principle: "Add a rate limit to new endpoints" }, { id: 2, principle: "New endpoints need rate limiting" }] },
+      { rules: [{ description: "Add a rate limit to every new endpoint", scope: ["src/api/**"], commentIds: [1, 2] }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+    ];
+    const store = memoryStore();
+    const first = cachedLlm(fakeLlm(...answers), store, "m");
+    const rules = await extractRules([comment(1), comment(2)], first);
+    expect(first.cacheStats()).toEqual({ hits: 0, misses: 3 });
+
+    const replay = replayLlm(store, "m");
+    expect(await extractRules([comment(1), comment(2)], replay)).toEqual(rules);
+    expect(replay.cacheStats()).toEqual({ hits: 3, misses: 0 });
+  });
+});
