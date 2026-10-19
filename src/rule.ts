@@ -32,9 +32,11 @@ export const RuleSchema = z.object({
 export type Rule = z.infer<typeof RuleSchema>;
 
 /**
- * How far a rule can be relied on. "core": several comments from several reviewers asked for it,
- * the part of the output that comes back run after run. "emerging": everything else, rules
- * that may be real but rest on thinner evidence and are the first to change on a re-mine.
+ * How much evidence a rule has. "core": several comments from several reviewers asked for it;
+ * in repeated runs on the same repository these rules were found again more often than the
+ * others, but not always (measured retention between 0.4 and 0.9 depending on the repository).
+ * "emerging": everything else, rules that may well be real but rest on thinner evidence, among
+ * them rules a single maintainer asked for many times.
  */
 export type RuleTier = "core" | "emerging";
 

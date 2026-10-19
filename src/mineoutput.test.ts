@@ -39,6 +39,15 @@ describe("renderMineOutput", () => {
     expect(text).toContain("1 emerging candidates not shown");
   });
 
+  it("points out single-reviewer candidates that have many comments", () => {
+    const maintainer = rule("m", ["anna", "anna", "anna", "anna"]); // 4 comments, one reviewer: emerging by definition
+    const text = renderMineOutput([core("a"), maintainer, emerging("b")]).join("\n");
+    expect(text).toContain("2 emerging candidates not shown (1 with 3+ comments but a single reviewer).");
+    expect(renderMineOutput([emerging("b")]).join("\n")).toContain("1 emerging candidates not shown.");
+    const all = renderMineOutput([maintainer], { all: true }).join("\n");
+    expect(all).toContain("4 comments, single reviewer");
+  });
+
   it("says when nothing was found at all", () => {
     expect(renderMineOutput([]).join("\n")).toContain("No recurring rules found.");
   });
