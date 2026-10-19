@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeSharedSources } from "./extract.js";
+import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources } from "./extract.js";
 import type { Rule } from "./rule.js";
 import type { ReviewComment } from "./github.js";
 import type { Llm } from "./llm.js";
@@ -138,13 +138,13 @@ describe("extractRules quality guards", () => {
     );
     const rules = await extractRules([comment(1, { reviewer: "anna" }), comment(2, { reviewer: "anna" })], llm);
     expect(isSingleReviewer(rules[0]!)).toBe(true);
-    expect(rules[0]!.confidence).toBeCloseTo(0.3);
+    expect(rules[0]!.confidence).toBeCloseTo(0.2);
   });
 
   it("skips comments older than maxAgeDays", async () => {
     const llm: Llm = { parse: async () => { throw new Error("should not be called"); } };
     const old = [comment(1, { createdAt: "2020-01-01T00:00:00Z" }), comment(2, { createdAt: "2020-01-02T00:00:00Z" })];
-    expect(await extractRules(old, llm, { now: new Date("2026-10-19T00:00:00Z") })).toEqual([]);
+    expect(await extractRules(old, llm, { now: new Date("2026-10-19T00:00:00Z"), minRecentComments: 0 })).toEqual([]);
   });
 
   it("reports why merged rules were dropped", async () => {
@@ -233,5 +233,92 @@ describe("mergeSharedSources", () => {
     ]);
     expect(merged).toHaveLength(2);
     expect(merged.find((r) => r.sources.some((x) => x.prNumber === 3))!.sources).toHaveLength(3);
+  });
+});
+
+describe("adaptive staleness cutoff", () => {
+  const old = (n: number) => Array.from({ length: n }, (_, i) => comment(i + 1, { prNumber: 100 + i, createdAt: `2020-01-${String(i + 1).padStart(2, "0")}T00:00:00Z` }));
+  const now = new Date("2026-10-19T00:00:00Z");
+
+  it("keeps the newest old comments when too little recent evidence is left", async () => {
+    const lines: string[] = [];
+    let analysed = 0;
+    const llm: Llm = { parse: async (prompt) => { analysed = (prompt.match(/^\[\d+\] file:/gm) ?? []).length; return { items: [] } as never; } };
+    await extractRules(old(5), llm, { now, minRecentComments: 3, onProgress: (m) => lines.push(m) });
+    expect(analysed).toBe(3);
+    expect(lines.join("\n")).toContain("Only 0 comments are newer than 730 days; keeping the 3 newest");
+  });
+
+  it("applies the cutoff normally once enough recent comments remain", async () => {
+    const recent = [1, 2, 3].map((i) => comment(i, { prNumber: 200 + i, createdAt: "2026-10-01T00:00:00Z" }));
+    let analysed = 0;
+    const llm: Llm = { parse: async (prompt) => { analysed = (prompt.match(/^\[\d+\] file:/gm) ?? []).length; return { items: [] } as never; } };
+    await extractRules([...recent, ...old(5).map((c) => ({ ...c, id: c.id + 100 }))], llm, { now, minRecentComments: 3 });
+    expect(analysed).toBe(3);
+  });
+});
+
+describe("empty result hint", () => {
+  const hintFor = async (comments: ReviewComment[], llm: Llm) => {
+    const lines: string[] = [];
+    await extractRules(comments, llm, { onProgress: (m) => lines.push(m) });
+    return lines.find((l) => l.startsWith("Hint:"));
+  };
+
+  it("explains an empty fetch", async () => {
+    expect(await hintFor([], fakeLlm())).toContain("No review comments were found");
+  });
+
+  it("explains comments that are all replies or too short", async () => {
+    expect(await hintFor([comment(1, { inReplyTo: 9 })], fakeLlm())).toContain("None of the 1 fetched comments is a usable top-level review comment");
+  });
+
+  it("explains candidates that never recur", async () => {
+    const llm = fakeLlm({ items: [{ id: 1, principle: "P" }] }, { rules: [] });
+    expect(await hintFor([comment(1)], llm)).toContain("none recurs in 2+ comments from 2+ pull requests");
+  });
+
+  it("is not printed when rules are found", async () => {
+    const llm = fakeLlm(
+      { items: [{ id: 1, principle: "P" }, { id: 2, principle: "P" }] },
+      { rules: [{ description: "P", scope: [], commentIds: [1, 2] }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+    );
+    expect(await hintFor([comment(1), comment(2)], llm)).toBeUndefined();
+  });
+});
+
+describe("mergeCandidates", () => {
+  it("carries a rule through higher merge levels when the model finds no partner for it", async () => {
+    const candidates = Array.from({ length: 151 }, (_, i) => ({ id: i + 1, principle: `P${i}` }));
+    // Level 1: chunk of 150 yields one rule from ids 1 and 2; the last chunk yields nothing.
+    // Level 2: no partner for the surviving rule, so the model returns no groups.
+    const llm = fakeLlm(
+      { rules: [{ description: "Rule A", scope: [], commentIds: [1, 2] }] },
+      { rules: [] },
+      { rules: [] },
+    );
+    const merged = await mergeCandidates(candidates, llm);
+    expect(merged).toEqual([{ description: "Rule A", scope: [], commentIds: [1, 2] }]);
+  });
+});
+
+describe("batch concurrency", () => {
+  it("keeps results complete and ordered when batches run in parallel", async () => {
+    const comments = [1, 2, 3, 4].map((i) => comment(i));
+    const seen: number[] = [];
+    const llm: Llm = {
+      parse: async (prompt, schema) => {
+        const ids = [...prompt.matchAll(/^\[(\d+)\] file:/gm)].map((m) => Number(m[1]));
+        await new Promise((r) => setTimeout(r, ids[0] === 4 ? 1 : 15));
+        seen.push(...ids);
+        if (prompt.includes("candidate coding rules")) return schema.parse({ rules: [{ description: "P", scope: [], commentIds: [1, 2, 3, 4] }] });
+        if (prompt.includes("audit rules")) return schema.parse({ rules: [{ index: 0, supportingIds: [1, 2, 3, 4], revisedDescription: null }] });
+        return schema.parse({ items: ids.map((id) => ({ id, principle: "P" })) });
+      },
+    };
+    const rules = await extractRules(comments, llm, { batchSize: 1, concurrency: 4 });
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.sources).toHaveLength(4);
   });
 });

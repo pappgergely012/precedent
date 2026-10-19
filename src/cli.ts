@@ -78,7 +78,8 @@ async function main(): Promise<void> {
     const prs = new Set(comments.map((c) => c.prNumber));
     console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
 
-    let rules = await extractRules(comments, anthropicLlm(), {
+    const llm = anthropicLlm();
+    let rules = await extractRules(comments, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
@@ -96,8 +97,8 @@ async function main(): Promise<void> {
         console.log("No contributor guide found (CONTRIBUTING.md, AGENTS.md, ...); skipping the documented-vs-enforced check.");
       } else {
         progress(`Reading ${docs.length} guide file(s): ${docs.map((d) => d.path).join(", ")}`);
-        const docRules = await extractDocRules(docs, anthropicLlm());
-        ({ rules, documentedOnly } = await reconcileRules(rules, docRules, anthropicLlm()));
+        const docRules = await extractDocRules(docs, llm);
+        ({ rules, documentedOnly } = await reconcileRules(rules, docRules, llm));
         progress(`${docRules.length} documented rules; ${rules.filter((r) => r.origin === "both").length} also enforced, ${rules.filter((r) => r.origin === "conflict").length} possible conflicts`);
       }
     }
@@ -120,6 +121,10 @@ async function main(): Promise<void> {
     if (documentedOnly && documentedOnly.length > 0) {
       console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
       for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
+    }
+    const usage = llm.usage?.();
+    if (usage) {
+      console.log(`\nModel usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
     }
     if (values.out) {
       await writeRulesFile(values.out, repo, rules, documentedOnly);

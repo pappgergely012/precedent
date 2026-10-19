@@ -8,6 +8,8 @@ export const DEFAULT_MODEL = "claude-haiku-5-5";
 /** Minimal LLM interface so the extraction logic can be tested without the network. */
 export interface Llm {
   parse<S extends z.ZodTypeAny>(prompt: string, schema: S): Promise<z.infer<S>>;
+  /** Tokens spent so far, when the implementation measures them. */
+  usage?(): { calls: number; inputTokens: number; outputTokens: number };
 }
 
 /** Retry a flaky call (malformed structured output, transient API errors) a few times. */
@@ -33,8 +35,10 @@ export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Ll
     baseURL: process.env.PRECEDENT_ANTHROPIC_BASE_URL ?? "https://api.anthropic.com",
   });
   const model = opts.model ?? process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
+  const totals = { calls: 0, inputTokens: 0, outputTokens: 0 };
 
   return {
+    usage: () => ({ ...totals }),
     parse(prompt, schema) {
       return withRetry(async () => {
         const response = await client.messages.parse({
@@ -45,6 +49,10 @@ export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Ll
           messages: [{ role: "user", content: prompt }],
           output_config: { effort: "low", format: zodOutputFormat(schema) },
         });
+        // Counted per attempt: a retried call is paid for again.
+        totals.calls++;
+        totals.inputTokens += response.usage.input_tokens;
+        totals.outputTokens += response.usage.output_tokens;
         if (response.stop_reason === "refusal") {
           throw new Error("The model declined to process this request");
         }
