@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fetchWithRetry } from "./github.js";
 import type { Rule } from "./rule.js";
 
 const API = "https://api.github.com";
@@ -11,6 +12,7 @@ const CommentSchema = z.object({
 export interface VerifyOptions {
   token?: string;
   fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
   /** Same thresholds as extraction: a rule must keep this many verified sources / distinct PRs. */
   minOccurrences?: number;
   minPullRequests?: number;
@@ -40,7 +42,7 @@ export async function verifyRules(repo: string, rules: Rule[], opts: VerifyOptio
   const lookup = (id: number) => {
     let hit = cache.get(id);
     if (!hit) {
-      hit = doFetch(`${API}/repos/${repo}/pulls/comments/${id}`, { headers })
+      hit = fetchWithRetry(doFetch, `${API}/repos/${repo}/pulls/comments/${id}`, { headers }, { sleep: opts.sleep })
         .then(async (res) => (res.ok ? CommentSchema.parse(await res.json()) : undefined))
         .catch(() => undefined);
       cache.set(id, hit);
