@@ -5,11 +5,12 @@ import { parseDiff } from "./diff.js";
 import { extractRules } from "./extract.js";
 import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
 import { anthropicLlm } from "./llm.js";
+import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--verify]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -22,6 +23,7 @@ const { positionals, values } = parseArgs({
     rules: { type: "string" },
     diff: { type: "string" },
     post: { type: "boolean" },
+    verify: { type: "boolean" },
     "max-pages": { type: "string" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
@@ -60,11 +62,16 @@ if (command === "mine" && repo) {
   const prs = new Set(comments.map((c) => c.prNumber));
   console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
 
-  const rules = await extractRules(comments, anthropicLlm(), {
+  let rules = await extractRules(comments, anthropicLlm(), {
     maxComments: intFlag("max-comments", 1000),
     minOccurrences: intFlag("min-occurrences", 2),
     onProgress: progress,
   });
+  if (values.verify) {
+    const before = rules.length;
+    rules = await verifyRules(repo, rules, { token: process.env.GITHUB_TOKEN, minOccurrences: intFlag("min-occurrences", 2) });
+    console.log(`Verified citations: kept ${rules.length} of ${before} rules.`);
+  }
   if (rules.length === 0) {
     console.log("No recurring rules found.");
   }
