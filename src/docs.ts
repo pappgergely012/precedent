@@ -123,7 +123,27 @@ export function isPointer(quote: string): boolean {
   return /^(please\s+)?(read|see|refer to|check out|check|visit|have a look at)\b/i.test(withoutLinks);
 }
 
-const normalize = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+/**
+ * The words of a guide passage without its markup. Guides are full of reStructuredText roles
+ * (`:meth:` with a module path inside), literals, link targets and line wraps that the model
+ * drops when it quotes: a role keeps its label or its last name, a link keeps its text, and
+ * only letters and digits are compared.
+ */
+const squash = (text: string) =>
+  text
+    .replace(/:[a-zA-Z]+:`([^`]*)`/g, (_m, body: string) => {
+      const label = /^(.*?)\s*<[^>]*>$/.exec(body)?.[1] ?? body;
+      return label.replace(/^[~!]/, "").split(".").pop() ?? label;
+    })
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
+/** The quote appears in the guide text, ignoring markup, case and whitespace. */
+export function quoteInText(quote: string, text: string): boolean {
+  const q = squash(quote);
+  return q.length >= 12 && squash(text).includes(q);
+}
 
 const DocRulesSchema = z.object({
   rules: z.array(z.object({ description: z.string(), quote: z.string() })),
@@ -148,11 +168,10 @@ ${doc.text}`;
 export async function extractDocRules(docs: GuideDoc[], llm: Llm): Promise<DocRule[]> {
   const out: DocRule[] = [];
   for (const doc of docs) {
-    const haystack = normalize(doc.text);
     const { rules } = await llm.parse(docRulesPrompt(doc), DocRulesSchema);
     for (const r of rules) {
       const quote = r.quote.trim();
-      if (quote && !isPointer(quote) && haystack.includes(normalize(quote))) out.push({ description: r.description.trim(), path: doc.path, quote });
+      if (quote && !isPointer(quote) && quoteInText(quote, doc.text)) out.push({ description: r.description.trim(), path: doc.path, quote });
     }
   }
   return out;
@@ -192,13 +211,18 @@ const VerifySchema = z.object({
 
 function verifyPrompt(pairs: { ruleText: string; quote: string }[]): string {
   const blocks = pairs.map((p, i) => `Pair ${i}\nMined rule: ${p.ruleText}\nGuide text: "${p.quote}"`).join("\n\n");
-  return `For each pair, judge ONLY from the guide text shown, read on its own.
+  return `For each pair, judge ONLY from the guide text shown, read on its own. The mined rule comes from what reviewers asked for; the guide text is what the project wrote down.
 
-- "same": the guide text, by itself, asks contributors to do what the mined rule says (not merely the same topic or area).
-- "conflict": the guide text, by itself, clearly asks for the opposite of the mined rule in the same situation.
-- "no": anything else, including text that only mentions the topic, only points to another document, covers a different situation, or is more general or more specific in a way that changes what is asked.
+- "same": the guide text asks contributors to do what the mined rule asks. The rule may be shorter or less detailed than the guide (or the other way round) and still be "same", as long as doing what the guide says is doing what the rule says in the common case. Sharing a topic is not enough.
+- "conflict": following the guide text would mean breaking the mined rule, or the other way round: one requires something the other forbids, in the same kind of situation.
+- "no": anything else: only the topic is shared, a different behaviour or situation, a pointer to another document, or no clear relation.
 
-When unsure, answer "no".
+Examples (not from this project):
+- Rule "Do not add tests for private helpers." / Guide "Every change must include tests." -> conflict (a requirement against a prohibition about the same changes).
+- Rule "Keep functions short." / Guide "Functions longer than 50 lines must be split." -> same.
+- Rule "Name test files after the module." / Guide "Run the linter before pushing." -> no (different behaviours).
+
+When unsure between "same" and "no", answer "no". Answer "conflict" only when one text requires what the other forbids.
 
 ${blocks}`;
 }
@@ -247,7 +271,7 @@ function retrieve(rule: Rule, docRules: DocRule[]): number[] {
 
 type Verdict = "same" | "conflict" | "no";
 
-async function judgePairs(pairs: { ruleText: string; quote: string }[], llm: Llm): Promise<Verdict[]> {
+export async function judgePairs(pairs: { ruleText: string; quote: string }[], llm: Llm): Promise<Verdict[]> {
   const out: Verdict[] = [];
   for (let i = 0; i < pairs.length; i += VERIFY_BATCH) {
     const chunk = pairs.slice(i, i + VERIFY_BATCH);
@@ -256,6 +280,20 @@ async function judgePairs(pairs: { ruleText: string; quote: string }[], llm: Llm
     chunk.forEach((_, j) => out.push(byPair.get(j) ?? "no"));
   }
   return out;
+}
+
+/**
+ * `judgePairs` asked `votes` times, majority wins (a tie is "no"). One sample of the model is
+ * noisy on borderline pairs; the verdict a pair keeps is the one most samples agree on.
+ */
+export async function judgeMajority(pairs: { ruleText: string; quote: string }[], llm: Llm, votes = 3): Promise<Verdict[]> {
+  const rounds = await Promise.all(Array.from({ length: votes }, () => judgePairs(pairs, llm)));
+  return pairs.map((_, i) => {
+    const counts = new Map<Verdict, number>();
+    for (const round of rounds) counts.set(round[i]!, (counts.get(round[i]!) ?? 0) + 1);
+    const [verdict, n] = [...counts].sort((a, b) => b[1] - a[1])[0]!;
+    return n > votes / 2 ? verdict : "no";
+  });
 }
 
 /** Tag every mined rule as documented too ("both"), a possible conflict, or enforced only. */
@@ -277,10 +315,10 @@ export async function reconcileRules(rules: Rule[], docRules: DocRule[], llm: Ll
   // Second look at every proposed pair with only the two texts in view. Anything not confirmed
   // is treated as enforced. A conflict is a serious claim, so it must be confirmed twice.
   const list = [...proposals.values()];
-  const first = await judgePairs(list.map((p) => ({ ruleText: rules[p.ruleIndex]!.description, quote: docRules[p.docIndex]!.quote })), llm);
+  const first = await judgeMajority(list.map((p) => ({ ruleText: rules[p.ruleIndex]!.description, quote: docRules[p.docIndex]!.quote })), llm);
   const conflicts = list.map((_, i) => i).filter((i) => first[i] === "conflict");
   if (conflicts.length > 0) {
-    const again = await judgePairs(conflicts.map((i) => ({ ruleText: rules[list[i]!.ruleIndex]!.description, quote: docRules[list[i]!.docIndex]!.quote })), llm);
+    const again = await judgeMajority(conflicts.map((i) => ({ ruleText: rules[list[i]!.ruleIndex]!.description, quote: docRules[list[i]!.docIndex]!.quote })), llm);
     conflicts.forEach((i, j) => {
       if (again[j] !== "conflict") first[i] = "no";
     });

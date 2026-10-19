@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractDocRules, fetchGuideDocs, isPointer, reconcileRules, selectGuidePaths, wordOverlap, type DocRule } from "./docs.js";
+import { extractDocRules, fetchGuideDocs, isPointer, quoteInText, reconcileRules, selectGuidePaths, wordOverlap, type DocRule } from "./docs.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -205,5 +205,30 @@ describe("isPointer", () => {
   it("keeps quotes that state an expectation", () => {
     expect(isPointer("Add accompanying test case for every bug fix.")).toBe(false);
     expect(isPointer("Run `pnpm test` before pushing your changes.")).toBe(false);
+  });
+});
+
+describe("quoteInText", () => {
+  const text = "* In tests, use :meth:`~django.test.SimpleTestCase.assertRaisesMessage` and\n  :meth:`~django.test.SimpleTestCase.assertWarnsMessage` instead of\n  :meth:`~unittest.TestCase.assertRaises` and so you can check the message.";
+
+  it("finds a quote that the model gave without the markup", () => {
+    expect(quoteInText("In tests, use assertRaisesMessage and assertWarnsMessage instead of assertRaises", text)).toBe(true);
+  });
+
+  it("is not fooled by different wording or a too-short quote", () => {
+    expect(quoteInText("In tests, always prefer assertRaises", text)).toBe(false);
+    expect(quoteInText("tests", text)).toBe(false);
+  });
+});
+
+describe("regression fixture", () => {
+  it("is well formed", async () => {
+    const { cases } = JSON.parse(await (await import("node:fs/promises")).readFile("fixtures/docs-regression.json", "utf8")) as { cases: { id: string; rule: string; quote: string; expected: string }[] };
+    expect(new Set(cases.map((c) => c.id)).size).toBe(cases.length);
+    for (const c of cases) {
+      expect(["same", "conflict", "no"]).toContain(c.expected);
+      expect(c.rule.length).toBeGreaterThan(10);
+      expect(isPointer(c.quote)).toBe(false);
+    }
   });
 });
