@@ -1,10 +1,28 @@
 # Precedent
 
-Learn your team's unwritten code review rules from past pull requests.
+**Code review that cites its sources.**
 
-Precedent mines review comments and the changes that resolved them, turns recurring patterns into explicit rules, and cites the original pull request for every rule it applies.
+Every team has rules nobody wrote down: how errors are wrapped, which APIs are off limits, what a test must cover. They live in closed pull requests. Precedent mines your pull request review history, turns recurring patterns into explicit rules, and links each rule to the review comments where your team decided it.
 
 > Status: early prototype. `precedent mine` and `precedent review` work end to end; rule quality is still being tuned.
+
+```bash
+precedent mine owner/repo
+```
+
+You get a ranked list of rules. Each rule has a one-sentence statement and links to the original review comments behind it, so you can check it, edit it, or throw it out.
+
+## Why
+
+- **Learned from your history.** No rule writing. Rules come from what your reviewers actually asked for, in at least two different pull requests.
+- **Explainable.** A rule without a source is a guess. Every rule carries citations, and `--verify` re-fetches the cited comments from GitHub to confirm they exist.
+- **Open and editable.** The engine is open source. You see every rule and decide which stay.
+
+## What it is not (yet)
+
+- Not a bug finder. It learns conventions your team already enforces; it does not replace a general reviewer.
+- Rule quality is still being measured. Read the citations before trusting a rule.
+- Rules are only as good as your review history: a repository whose review comments are mostly one-off remarks yields few or no recurring rules.
 
 ## Usage
 
