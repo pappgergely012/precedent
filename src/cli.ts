@@ -10,12 +10,12 @@ import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
-import { ruleTier } from "./rule.js";
+import { renderMineOutput } from "./mineoutput.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
   precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
@@ -42,6 +42,7 @@ const { positionals, values } = parseArgs({
     "max-rules": { type: "string" },
     "include-single-reviewer": { type: "boolean" },
     "include-emerging": { type: "boolean" },
+    all: { type: "boolean" },
     verbose: { type: "boolean" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
@@ -115,26 +116,7 @@ async function main(): Promise<void> {
         progress(`${docRules.length} documented rules; ${rules.filter((r) => r.origin === "both").length} also enforced, ${rules.filter((r) => r.origin === "conflict").length} possible conflicts`);
       }
     }
-    if (rules.length === 0) {
-      console.log("No recurring rules found.");
-    }
-    const TOP = 10;
-    const core = rules.filter((r) => ruleTier(r) === "core").length;
-    if (rules.length > 0) {
-      console.log(`${rules.length} rules: ${core} core (3+ comments from 2+ reviewers) and ${rules.length - core} emerging (thinner evidence).`);
-    }
-    if (rules.length > TOP) console.log(`Showing the top ${TOP} of ${rules.length} rules.`);
-    rules.slice(0, TOP).forEach((rule, i) => {
-      const scope = rule.scope.length ? ` (${rule.scope.join(", ")})` : "";
-      console.log(`\n${i + 1}. ${rule.description}${scope}`);
-      const flag = isSingleReviewer(rule) ? ", single reviewer" : "";
-      console.log(`   ${ruleTier(rule)} rule, confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`);
-      for (const s of rule.sources.slice(0, 3)) console.log(`   - #${s.prNumber} @${s.reviewer} ${s.commentUrl}`);
-      const ref = rule.docRefs?.[0];
-      if (rule.origin === "both" && ref) console.log(`   documented in ${ref.path}: "${ref.quote.slice(0, 120)}"`);
-      else if (rule.origin === "conflict" && ref) console.log(`   POSSIBLE CONFLICT with ${ref.path}: "${ref.quote.slice(0, 120)}"`);
-      else if (rule.origin === "enforced") console.log("   enforced in reviews, not written in the guide");
-    });
+    for (const line of renderMineOutput(rules, { all: values.all, top: 10 })) console.log(line);
     if (documentedOnly && documentedOnly.length > 0) {
       console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
       for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
