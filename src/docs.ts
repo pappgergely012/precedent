@@ -266,6 +266,8 @@ const VERIFY_BATCH = 40;
 const NEAR_IDENTICAL = { share: 0.7, shared: 3 };
 /** The weakest lexical similarity worth sending to the strict second look. */
 const MIN_PROPOSAL_SCORE = 0.15;
+/** Pairs sent to the second look in one run: bounds the verification calls whatever the number of guide files. */
+const MAX_PROPOSALS = 150;
 
 /** Inverse document frequency over a set of texts: words that few texts use say more about a pair. */
 function idfOf(texts: string[]): (word: string) => number {
@@ -299,15 +301,15 @@ export function proposePairs(rules: Rule[], docRules: DocRule[]): { ruleIndex: n
   const docWords = docTexts.map(words);
   const score = (i: number, j: number) => weightedOverlap(ruleWords[i]!, docWords[j]!, idf);
 
-  const out = new Map<string, { ruleIndex: number; docIndex: number }>();
-  const add = (ruleIndex: number, docIndex: number) => out.set(`${ruleIndex}:${docIndex}`, { ruleIndex, docIndex });
+  const out = new Map<string, { ruleIndex: number; docIndex: number; s: number }>();
+  const add = (ruleIndex: number, docIndex: number, s: number) => out.set(`${ruleIndex}:${docIndex}`, { ruleIndex, docIndex, s });
   rules.forEach((_, i) => {
     docRules
       .map((_d, j) => ({ j, s: score(i, j) }))
       .filter((c) => c.s >= MIN_PROPOSAL_SCORE)
       .sort((x, y) => y.s - x.s || x.j - y.j)
       .slice(0, CANDIDATES_PER_SIDE)
-      .forEach((c) => add(i, c.j));
+      .forEach((c) => add(i, c.j, c.s));
   });
   docRules.forEach((_, j) => {
     rules
@@ -315,9 +317,13 @@ export function proposePairs(rules: Rule[], docRules: DocRule[]): { ruleIndex: n
       .filter((c) => c.s >= MIN_PROPOSAL_SCORE)
       .sort((x, y) => y.s - x.s || x.i - y.i)
       .slice(0, CANDIDATES_PER_SIDE)
-      .forEach((c) => add(c.i, j));
+      .forEach((c) => add(c.i, j, c.s));
   });
-  return [...out.values()].sort((a, b) => a.ruleIndex - b.ruleIndex || a.docIndex - b.docIndex);
+  return [...out.values()]
+    .sort((a, b) => b.s - a.s || a.ruleIndex - b.ruleIndex || a.docIndex - b.docIndex)
+    .slice(0, MAX_PROPOSALS)
+    .map(({ ruleIndex, docIndex }) => ({ ruleIndex, docIndex }))
+    .sort((a, b) => a.ruleIndex - b.ruleIndex || a.docIndex - b.docIndex);
 }
 
 type Verdict = "same" | "conflict" | "no";

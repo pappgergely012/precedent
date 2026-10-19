@@ -258,6 +258,14 @@ describe("proposePairs", () => {
     expect(pairs).not.toContain("2:2"); // nothing in common
   });
 
+  it("never proposes more than the cap, keeping the best-matching pairs", () => {
+    const rules = Array.from({ length: 30 }, (_, i) => rule(`r${i}`, `Keep alpha${i} and shared widget helpers documented`));
+    const docs = Array.from({ length: 60 }, (_, j) => doc(`Document widget helpers for alpha${j % 30}`, `Always document widget helpers near alpha${j % 30}.`));
+    const pairs = proposePairs(rules, docs);
+    expect(pairs.length).toBeLessThanOrEqual(150);
+    expect(pairs.length).toBeGreaterThan(0);
+  });
+
   it("proposes from the guide side too, so a guide rule always gets its closest mined rules", () => {
     const rules = [rule("a", "Wrap docstrings at 79 columns."), rule("b", "Add a regression test for each bug fix."), rule("c", "Name hooks with a use prefix.")];
     const docs = [doc("Every bug fix needs a regression test", "A good fix should also include a regression test.")];

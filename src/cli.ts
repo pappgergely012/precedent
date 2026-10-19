@@ -113,6 +113,7 @@ async function main(): Promise<void> {
         progress(`Reading ${docs.length} guide file(s): ${docs.map((d) => d.path).join(", ")}`);
         const docRules = await extractDocRules(docs, llm);
         ({ rules, documentedOnly } = await reconcileRules(rules, docRules, llm));
+        progress("--docs is in beta: the tags below are model judgements that vary between runs and miss some real matches; read the quoted guide text before relying on one.");
         progress(`${docRules.length} documented rules; ${rules.filter((r) => r.origin === "both").length} also enforced, ${rules.filter((r) => r.origin === "conflict").length} possible conflicts`);
       }
     }
