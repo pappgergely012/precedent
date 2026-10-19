@@ -1,10 +1,28 @@
 # Precedent
 
-Learn your team's unwritten code review rules from past pull requests.
+**Code review that cites its sources.**
 
-Precedent mines review comments and the changes that resolved them, turns recurring patterns into explicit rules, and cites the original pull request for every rule it applies.
+Every team has rules nobody wrote down: how errors are wrapped, which APIs are off limits, what a test must cover. They live in closed pull requests. Precedent mines your pull request review history, turns recurring patterns into explicit rules, and links each rule to the review comments where your team decided it.
 
 > Status: early prototype. `precedent mine` and `precedent review` work end to end; rule quality is still being tuned.
+
+```bash
+precedent mine owner/repo
+```
+
+You get a ranked list of rules. Each rule has a one-sentence statement and links to the original review comments behind it, so you can check it, edit it, or throw it out.
+
+## Why
+
+- **Learned from your history.** No rule writing. Rules come from what your reviewers actually asked for, in at least two different pull requests.
+- **Explainable.** A rule without a source is a guess. Every rule carries citations, and `--verify` re-fetches the cited comments from GitHub to confirm they exist.
+- **Open and editable.** The engine is open source. You see every rule and decide which stay.
+
+## What it is not (yet)
+
+- Not a bug finder. It learns conventions your team already enforces; it does not replace a general reviewer.
+- Rule quality is still being measured. Read the citations before trusting a rule.
+- Rules are only as good as your review history: a repository whose review comments are mostly one-off remarks yields few or no recurring rules.
 
 ## Usage
 
@@ -26,6 +44,7 @@ precedent review --diff pr.diff
 Needs `GITHUB_TOKEN` and `PRECEDENT_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`). Uses `claude-haiku-5-5` by default (override with `PRECEDENT_MODEL`).
 
 - `mine` reads up to `--max-pages` pages of review comments (default 30; paging stops early once enough top-level comments are collected), analyses the newest `--max-comments` (default 1000) and keeps rules backed by at least `--min-occurrences` comments (default 2) from at least 2 distinct pull requests. A rule's confidence is its number of distinct source pull requests divided by 5, capped at 1. Comments older than `--max-age-days` (default 730) are ignored, near-duplicate rules are merged in a final pass, and rules backed by a single reviewer get lower confidence and a "single reviewer" flag. The terminal shows the top 10 rules; `--out` saves all of them. Add `--verify` to re-fetch every cited comment from GitHub and drop rules whose citations do not resolve.
+- `stability` fetches the comments once, runs the extraction `--runs` times (default 3) and reports how much the rule lists overlap (mean pairwise Jaccard, and how many rules of the first run appear in every other run). Rules from different runs count as the same when they cite mostly the same comments or are worded almost identically. Each run costs about as much as one `mine`.
 - `review` only comments on lines the pull request added, reports each rule at most once per pull request, and cites the earlier pull requests where reviewers asked for the same thing.
 
 ## GitHub Action
