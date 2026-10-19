@@ -74,7 +74,7 @@ const MergedSchema = z.object({
 type MergedRule = z.infer<typeof MergedSchema>["rules"][number];
 
 /** Exactly what the model sees of one comment; also what the cache is keyed on. */
-const commentText = (c: ReviewComment) => `file: ${c.path}\n${c.body.trim().slice(0, 600)}`;
+export const commentText = (c: ReviewComment) => `file: ${c.path}\n${c.body.trim().slice(0, 600)}`;
 
 function principlesPrompt(batch: ReviewComment[]): string {
   const lines = batch.map((c) => `[${c.id}] ${commentText(c)}`).join("\n\n");
@@ -397,6 +397,32 @@ export async function extractRules(
   return rules;
 }
 
+/**
+ * The comments worth analysing: usable top-level review comments, newest first, restricted to the
+ * last `maxAgeDays` unless that leaves fewer than `minRecent`, in which case the newest `minRecent`
+ * are kept so a quiet repository's history is not thrown away.
+ */
+export function selectKept(
+  comments: ReviewComment[],
+  opts: { maxAgeDays: number; minRecent: number; now?: Date },
+): { all: ReviewComment[]; withinAge: ReviewComment[]; kept: ReviewComment[] } {
+  const cutoff = new Date((opts.now ?? new Date()).getTime() - opts.maxAgeDays * 86_400_000).toISOString();
+  const all = filterComments(comments).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const withinAge = all.filter((c) => c.createdAt >= cutoff);
+  const kept = withinAge.length >= opts.minRecent ? withinAge : all.slice(0, Math.min(all.length, opts.minRecent));
+  return { all, withinAge, kept };
+}
+
+/** The comments `extractRules` would send to the model for these options, newest first. */
+export function selectUsable(comments: ReviewComment[], opts: ExtractOptions = {}): ReviewComment[] {
+  const { kept } = selectKept(comments, {
+    maxAgeDays: opts.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS,
+    minRecent: opts.minRecentComments ?? DEFAULT_MIN_RECENT_COMMENTS,
+    now: opts.now,
+  });
+  return kept.slice(0, opts.maxComments ?? 600);
+}
+
 async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptions, stats: RunStats): Promise<Rule[]> {
   const { batchSize = 40, maxComments = 600, minOccurrences = 2, minPullRequests = 2 } = opts;
   const maxAgeDays = opts.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS;
@@ -404,12 +430,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   const concurrency = opts.concurrency ?? 4;
 
   const log = opts.onProgress ?? (() => {});
-  const cutoff = new Date((opts.now ?? new Date()).getTime() - maxAgeDays * 86_400_000).toISOString();
-  const all = filterComments(comments).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const withinAge = all.filter((c) => c.createdAt >= cutoff);
-  // Old comments only count when too little recent evidence is left: a quiet repository's
-  // conventions are still in force even if its latest review is a year old.
-  const kept = withinAge.length >= minRecent ? withinAge : all.slice(0, Math.min(all.length, minRecent));
+  const { all, withinAge, kept } = selectKept(comments, { maxAgeDays, minRecent, now: opts.now });
   stats.skippedStale = all.length - kept.length;
   stats.keptDespiteAge = kept.length - withinAge.length;
   if (stats.skippedStale > 0) log(`Skipped ${stats.skippedStale} comments older than ${maxAgeDays} days`);

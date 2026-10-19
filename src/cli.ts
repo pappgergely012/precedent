@@ -2,7 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parseDiff } from "./diff.js";
-import { extractRules, isSingleReviewer } from "./extract.js";
+import { commentText, extractRules, isSingleReviewer, selectUsable } from "./extract.js";
 import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
 import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
@@ -10,12 +10,13 @@ import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
+import { describeEstimate, estimateUsage } from "./estimate.js";
 import { renderMineOutput } from "./mineoutput.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--verify] [--docs] [--all]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--dry-run] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
   precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
@@ -43,6 +44,7 @@ const { positionals, values } = parseArgs({
     "include-single-reviewer": { type: "boolean" },
     "include-emerging": { type: "boolean" },
     all: { type: "boolean" },
+    "dry-run": { type: "boolean" },
     verbose: { type: "boolean" },
     "max-comments": { type: "string" },
     "min-occurrences": { type: "string" },
@@ -80,7 +82,7 @@ const progress = (message: string) => console.log(`[${new Date().toISOString().s
 
 async function main(): Promise<void> {
   if (command === "mine" && repo) {
-    requireAnthropicKey();
+    if (!values["dry-run"]) requireAnthropicKey();
     if (!process.env.GITHUB_TOKEN) {
       console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour and mining a large repository will hit the limit.");
     }
@@ -90,6 +92,13 @@ async function main(): Promise<void> {
     });
     const prs = new Set(comments.map((c) => c.prNumber));
     console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
+    if (values["dry-run"]) {
+      const usable = selectUsable(comments, { maxComments: intFlag("max-comments", 1000), maxAgeDays: intFlag("max-age-days", 730) });
+      const cache = values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
+      const pending = cache ? usable.filter((c) => cache.get(c.id, commentText(c)) === undefined).length : usable.length;
+      for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending }), usable.length, 1)) console.log(line);
+      return;
+    }
 
     const llm = anthropicLlm();
     let rules = await extractRules(comments, llm, {
