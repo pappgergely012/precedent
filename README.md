@@ -135,3 +135,7 @@ Written in TypeScript (strict mode).
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+## Using it as a library (unstable)
+
+`src/index.ts` is the library entry point (`import { extractRules, anthropicLlm, ... } from "precedent"` once built with `pnpm build`). Importing it has no side effects; the CLI lives in `cli.ts`. The package is not published to npm and the surface may change before 1.0: a test pins the list of exports so changes are deliberate. Tests and callers can swap the model for a recorded one (`cachedLlm` / `replayLlm`) and run the whole pipeline without network or credit.
