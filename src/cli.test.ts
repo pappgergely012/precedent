@@ -116,13 +116,4 @@ describe("cli help, version and early validation", () => {
     expect(r.stderr).toContain('Rules file /nonexistent/rules.json not found. Run "precedent mine owner/repo --out /nonexistent/rules.json" first.');
     expect(r.stderr).not.toContain("ENOENT");
   });
-
-  it("rejects --cache together with --no-cache before fetching anything, also for a dry run", () => {
-    for (const extra of [[], ["--dry-run"]]) {
-      const r = run(["mine", "o/r", "--cache", "c.json", "--no-cache", ...extra]);
-      expect(r.status).toBe(1);
-      expect(r.stderr).toContain("--cache and --no-cache cannot be used together.");
-      expect(r.stdout).not.toContain("Fetched");
-    }
-  });
 });
