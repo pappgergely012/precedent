@@ -39,6 +39,11 @@ export interface FetchOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Review bots often run as regular user accounts, so the account type alone is not enough. */
+function isBot(user: { login: string; type: string }): boolean {
+  return user.type === "Bot" || /bot(?:\])?$/i.test(user.login);
+}
+
 /**
  * Fetch review comments across all pull requests of a repository.
  * Bot comments are skipped, since rules should come from human decisions.
@@ -75,7 +80,7 @@ export async function fetchReviewComments(
     const items = z.array(ApiCommentSchema).parse(await res.json());
 
     for (const c of items) {
-      if (!c.user || c.user.type === "Bot") continue;
+      if (!c.user || isBot(c.user)) continue;
       comments.push({
         id: c.id,
         prNumber: Number(c.pull_request_url.split("/").pop()),

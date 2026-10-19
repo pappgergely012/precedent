@@ -23,6 +23,13 @@ describe("fetchReviewComments", () => {
     expect(result[0]).toMatchObject({ id: 1, prNumber: 42, reviewer: "anna", path: "src/api.ts" });
   });
 
+  it("skips review bots that run as ordinary user accounts", async () => {
+    const fetchImpl = (() =>
+      json([comment(1, "anna"), comment(2, "zigpy-review-bot"), comment(3, "balloobbot"), comment(4, "dependabot[bot]")])) as typeof fetch;
+    const result = await fetchReviewComments("o/r", { fetchImpl });
+    expect(result.map((c) => c.reviewer)).toEqual(["anna"]);
+  });
+
   it("paginates until a short page", async () => {
     const full = Array.from({ length: 100 }, (_, i) => comment(i + 1, "anna"));
     let calls = 0;
