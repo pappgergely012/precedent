@@ -10,7 +10,7 @@ import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { cachedLlm, describeCache, fileStore } from "./llmcache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
-import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
+import { ExportError, renderBlock, selectRules, suspiciousRules, writeExport, type ExportFormat } from "./export.js";
 import { describeEstimate, estimateUsage } from "./estimate.js";
 import { renderMineOutput } from "./mineoutput.js";
 import { createRedactor } from "./redact.js";
@@ -26,36 +26,42 @@ const USAGE = `Usage:
 
 const DEFAULT_RULES_FILE = ".precedent/rules.json";
 
-const { positionals, values } = parseArgs({
-  allowPositionals: true,
-  options: {
-    out: { type: "string" },
-    rules: { type: "string" },
-    diff: { type: "string" },
-    post: { type: "boolean" },
-    verify: { type: "boolean" },
-    cache: { type: "string" },
-    "no-cache": { type: "boolean" },
-    top: { type: "string" },
-    "pin-extraction": { type: "boolean" },
-    docs: { type: "boolean" },
-    "max-pages": { type: "string" },
-    runs: { type: "string" },
-    format: { type: "string" },
-    "min-confidence": { type: "string" },
-    "max-rules": { type: "string" },
-    "include-single-reviewer": { type: "boolean" },
-    "include-emerging": { type: "boolean" },
-    all: { type: "boolean" },
-    redact: { type: "boolean" },
-    "pre-merge": { type: "boolean" },
-    "dry-run": { type: "boolean" },
-    verbose: { type: "boolean" },
-    "max-comments": { type: "string" },
-    "min-occurrences": { type: "string" },
-    "max-age-days": { type: "string" },
-  },
-});
+function parseCli() {
+  try {
+    return parseArgs({ allowPositionals: true, options: OPTIONS });
+  } catch (error) {
+    console.error(`${(error as Error).message.split("\n")[0]}\n\n${USAGE}`);
+    process.exit(1);
+  }
+}
+const OPTIONS = {
+  out: { type: "string" },
+  rules: { type: "string" },
+  diff: { type: "string" },
+  post: { type: "boolean" },
+  verify: { type: "boolean" },
+  cache: { type: "string" },
+  "no-cache": { type: "boolean" },
+  top: { type: "string" },
+  "pin-extraction": { type: "boolean" },
+  docs: { type: "boolean" },
+  "max-pages": { type: "string" },
+  runs: { type: "string" },
+  format: { type: "string" },
+  "min-confidence": { type: "string" },
+  "max-rules": { type: "string" },
+  "include-single-reviewer": { type: "boolean" },
+  "include-emerging": { type: "boolean" },
+  all: { type: "boolean" },
+  redact: { type: "boolean" },
+  "pre-merge": { type: "boolean" },
+  "dry-run": { type: "boolean" },
+  verbose: { type: "boolean" },
+  "max-comments": { type: "string" },
+  "min-occurrences": { type: "string" },
+  "max-age-days": { type: "string" },
+} as const;
+const { positionals, values } = parseCli();
 const [command, repo, prArg] = positionals;
 
 function fail(message: string): never {
@@ -179,19 +185,34 @@ async function main(): Promise<void> {
     );
     const minConfidence = values["min-confidence"] === undefined ? undefined : Number(values["min-confidence"]);
     if (minConfidence !== undefined && !(minConfidence >= 0 && minConfidence <= 1)) fail("--min-confidence needs a number between 0 and 1.");
-    const block = renderBlock(file, {
+    const exportOptions = {
       format: format as ExportFormat,
       minConfidence,
       maxRules: values["max-rules"] === undefined ? undefined : intFlag("max-rules", 30),
       includeSingleReviewer: values["include-single-reviewer"],
       includeEmerging: values["include-emerging"],
-    });
+    };
+    const block = renderBlock(file, exportOptions);
+    const chosen = selectRules(file.rules, exportOptions);
+    const skipped = file.rules.length - chosen.length;
+    if (skipped > 0) {
+      console.error(`${skipped} of ${file.rules.length} rules not exported: only core rules with confidence ${minConfidence ?? 0.4}+ from 2+ reviewers are exported (up to ${exportOptions.maxRules ?? 30}); see --include-emerging, --include-single-reviewer, --min-confidence, --max-rules.`);
+    }
+    const odd = suspiciousRules(chosen);
+    if (odd.length > 0) {
+      console.error(`Warning: ${odd.length} exported rule(s) contain links, shell commands or instruction-like text. Rule text comes from review comments; read it before committing:`);
+      for (const r of odd) console.error(`   - ${r.description.replace(/\s+/g, " ").slice(0, 120)}`);
+    }
     if (!values.out) {
       console.log(block);
     } else {
-      const existing = await readFile(values.out, "utf8").catch(() => undefined);
-      await writeFile(values.out, applyBlock(existing, block));
-      console.log(`Wrote the rules block to ${values.out}`);
+      try {
+        const { backedUp } = await writeExport(values.out, block);
+        console.log(`Wrote the rules block to ${values.out}${backedUp ? ` (original kept as ${values.out}.bak)` : ""}`);
+      } catch (error) {
+        if (error instanceof ExportError) fail(error.message);
+        throw error;
+      }
     }
   } else if (command === "stability" && repo) {
     requireAnthropicKey();
