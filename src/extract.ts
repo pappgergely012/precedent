@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ReviewComment } from "./github.js";
+import type { PrincipleCache } from "./cache.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -21,6 +22,8 @@ export interface ExtractOptions {
   minRecentComments?: number;
   /** Extraction batches sent to the model at the same time. */
   concurrency?: number;
+  /** Per-comment answers from earlier runs; comments found in it are not sent to the model again. */
+  cache?: PrincipleCache;
   /** Current time, injectable for tests. */
   now?: Date;
   /** Called with a human-readable status line as the work advances. */
@@ -70,10 +73,11 @@ const MergedSchema = z.object({
 
 type MergedRule = z.infer<typeof MergedSchema>["rules"][number];
 
+/** Exactly what the model sees of one comment; also what the cache is keyed on. */
+const commentText = (c: ReviewComment) => `file: ${c.path}\n${c.body.trim().slice(0, 600)}`;
+
 function principlesPrompt(batch: ReviewComment[]): string {
-  const lines = batch
-    .map((c) => `[${c.id}] file: ${c.path}\n${c.body.trim().slice(0, 600)}`)
-    .join("\n\n");
+  const lines = batch.map((c) => `[${c.id}] ${commentText(c)}`).join("\n\n");
   return `You analyse code review comments to find a team's recurring coding rules.
 
 For each comment below, decide whether it expresses a GENERAL, reusable rule (something a reviewer would ask for in many pull requests). If so, give the rule as one short imperative sentence without PR-specific details (for example "Add a rate limit to every new endpoint"). The rule must express exactly ONE obligation.
@@ -417,20 +421,35 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   if (usable.length === 0) return [];
   const byId = new Map(usable.map((c) => [c.id, c]));
 
-  const batchList = Array.from({ length: Math.ceil(usable.length / batchSize) }, (_, i) => usable.slice(i * batchSize, (i + 1) * batchSize));
-  log(`Analysing ${usable.length} of ${comments.length} comments in ${batchList.length} batches`);
+  const candidates: { id: number; principle: string }[] = [];
+  const cache = opts.cache;
+  const pending: ReviewComment[] = [];
+  for (const c of usable) {
+    const cached = cache?.get(c.id, commentText(c));
+    if (cached === undefined) pending.push(c);
+    else if (cached !== null) candidates.push({ id: c.id, principle: cached });
+  }
+  if (cache) log(`${usable.length - pending.length} of ${usable.length} comments answered from the cache`);
+
+  const batchList = Array.from({ length: Math.ceil(pending.length / batchSize) }, (_, i) => pending.slice(i * batchSize, (i + 1) * batchSize));
+  log(`Analysing ${pending.length} of ${comments.length} comments in ${batchList.length} batches`);
   let done = 0;
   const outputs = await mapPool(batchList, concurrency, async (batch) => {
     const out = await llm.parse(principlesPrompt(batch), PrinciplesSchema);
     log(`Batch ${++done}/${batchList.length} done`);
-    return out;
+    return { batch, out };
   });
-  const candidates: { id: number; principle: string }[] = [];
-  for (const out of outputs) {
-    for (const item of out.items) {
-      if (item.principle && byId.has(item.id)) candidates.push({ id: item.id, principle: item.principle });
+  for (const { batch, out } of outputs) {
+    const answered = new Map(out.items.map((item) => [item.id, item.principle]));
+    for (const c of batch) {
+      // A comment the model skipped is not cached: it was not judged, so ask again next time.
+      if (!answered.has(c.id)) continue;
+      const principle = answered.get(c.id) ?? null;
+      cache?.set(c.id, commentText(c), principle);
+      if (principle) candidates.push({ id: c.id, principle });
     }
   }
+  await cache?.save();
   stats.candidates = candidates.length;
   log(`${candidates.length} candidate rules found`);
   if (process.env.PRECEDENT_DEBUG) console.error(`[debug] ${usable.length} usable comments, ${candidates.length} candidate principles`);
