@@ -44,6 +44,7 @@ precedent review --diff pr.diff
 Needs `GITHUB_TOKEN` and `PRECEDENT_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`). Uses `claude-haiku-5-5` by default (override with `PRECEDENT_MODEL`).
 
 - `mine` reads up to `--max-pages` pages of review comments (default 30; paging stops early once enough top-level comments are collected), analyses the newest `--max-comments` (default 1000) and keeps rules backed by at least `--min-occurrences` comments (default 2) from at least 2 distinct pull requests. A rule's confidence is its number of distinct source pull requests divided by 5, capped at 1. Comments older than `--max-age-days` (default 730) are ignored, near-duplicate rules are merged in a final pass, and rules backed by a single reviewer get lower confidence and a "single reviewer" flag. The terminal shows the top 10 rules; `--out` saves all of them. Add `--verify` to re-fetch every cited comment from GitHub and drop rules whose citations do not resolve.
+- `export` turns a rules file into the context file your coding agents read, with a link to the review comments behind every rule: `precedent export --format claude --out CLAUDE.md` (also `agents` for `AGENTS.md` and `cursor` for `.cursorrules`; without `--out` it prints to the terminal). It needs no network and no model. The rules sit between `precedent:start` and `precedent:end` markers: re-exporting replaces only that block and leaves the rest of the file alone. By default it includes rules with confidence of at least 0.4 (`--min-confidence`), skips rules only one reviewer asked for (`--include-single-reviewer` keeps them) and caps the list at 30 (`--max-rules`).
 - `stability` fetches the comments once, runs the extraction `--runs` times (default 3) and reports how much the rule lists overlap (mean pairwise Jaccard, and how many rules of the first run appear in every other run). Rules from different runs count as the same when they cite mostly the same comments or are worded almost identically. Each run costs about as much as one `mine`.
 - `review` only comments on lines the pull request added, reports each rule at most once per pull request, and cites the earlier pull requests where reviewers asked for the same thing.
 
@@ -109,7 +110,7 @@ jobs:
 
 ## Planned
 
-- Export of the rules to `CLAUDE.md`, `.cursorrules` and lint configs.
+- Export of the rules to lint configs.
 
 ## Development
 
