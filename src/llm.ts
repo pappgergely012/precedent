@@ -14,7 +14,8 @@ export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Ll
   // Pin the base URL: ANTHROPIC_BASE_URL may point at an unrelated proxy
   // (for example inside a managed sandbox) that does not accept our key.
   const client = new Anthropic({
-    apiKey: opts.apiKey,
+    // PRECEDENT_ANTHROPIC_API_KEY lets the key reach sandboxes that reserve ANTHROPIC_API_KEY.
+    apiKey: opts.apiKey ?? process.env.PRECEDENT_ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY,
     baseURL: process.env.PRECEDENT_ANTHROPIC_BASE_URL ?? "https://api.anthropic.com",
   });
   const model = opts.model ?? process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;

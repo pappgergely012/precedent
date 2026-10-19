@@ -6,8 +6,8 @@ import { anthropicLlm } from "./llm.js";
 const [command, repo] = process.argv.slice(2);
 
 if (command === "mine" && repo) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error("ANTHROPIC_API_KEY is not set.");
+  if (!process.env.PRECEDENT_ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+    console.error("Set PRECEDENT_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY).");
     process.exit(1);
   }
   const comments = await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN });
