@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, constants, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ruleTier, type Rule } from "./rule.js";
 import type { RulesFile } from "./rulesfile.js";
@@ -37,6 +37,19 @@ export const MAX_RULE_CHARS = 500;
 
 const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u2028-\u202f\u205f-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]/gu;
 
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+/** Cut on a grapheme boundary so an emoji or a combined character is never split. */
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  let out = "";
+  for (const { segment } of graphemes.segment(text)) {
+    if (out.length + segment.length > maxChars - 1) break;
+    out += segment;
+  }
+  return `${out.trimEnd()}…`;
+}
+
 /**
  * Rule text comes from review comments and rules files, so it is untrusted input to files that
  * agents and editors read. Strip control and bidi characters, make `<` inert (no comment markers,
@@ -52,8 +65,7 @@ export function cleanText(text: string, maxChars = MAX_RULE_CHARS): string {
     .replace(/!\[/g, "[")
     .replace(/\s+/g, " ")
     .trim();
-  if (out.length > maxChars) out = `${out.slice(0, maxChars - 1).trimEnd()}…`;
-  return out;
+  return truncate(out, maxChars);
 }
 
 /** A glob is rendered inside backticks, so it must not contain one. */
@@ -113,6 +125,9 @@ export function renderBlock(file: RulesFile, opts: ExportOptions): string {
 /** Thrown when the target file cannot be updated without risking text we did not write. */
 export class ExportError extends Error {}
 
+/** ASCII whitespace only: the file may be read as bytes, where 0xA0 is part of a multi-byte character. */
+const isBlank = (text: string) => /^[ \t\r\n]*$/.test(text);
+
 const countOf = (text: string, needle: string) => text.split(needle).length - 1;
 
 /**
@@ -125,12 +140,12 @@ export function applyBlock(existing: string | undefined, block: string): string 
   if (countOf(block, START_MARKER) !== 1 || countOf(block, END_MARKER) !== 1) {
     throw new ExportError("Internal error: the generated block does not contain exactly one start and one end marker; nothing was written.");
   }
-  if (existing === undefined || existing.trim() === "") return `${block}\n`;
+  if (existing === undefined || isBlank(existing)) return `${block}\n`;
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
   const body = eol === "\r\n" ? block.replace(/\n/g, "\r\n") : block;
   const starts = countOf(existing, START_MARKER);
   const ends = countOf(existing, END_MARKER);
-  if (starts === 0 && ends === 0) return `${existing.replace(/\s+$/, "")}${eol}${eol}${body}${eol}`;
+  if (starts === 0 && ends === 0) return `${existing.replace(/[ \t\r\n]+$/, "")}${eol}${eol}${body}${eol}`;
   const start = existing.indexOf(START_MARKER);
   const end = existing.indexOf(END_MARKER);
   if (starts !== 1 || ends !== 1 || end < start) {
@@ -145,28 +160,38 @@ export function applyBlock(existing: string | undefined, block: string): string 
  * Update `path` with the block: refuse on unbalanced markers, keep the original once as
  * `<path>.bak` before the first change, and replace the file atomically (temp file in the same
  * directory, then rename) so a crash cannot leave a half-written agent file.
+ *
+ * A symlink is followed and the real file is updated, so `CLAUDE.md -> AGENTS.md` stays a link.
+ * The file is handled as bytes: everything outside the block is written back exactly, even when
+ * it is not valid UTF-8. A read-only target is refused rather than replaced.
  */
 export async function writeExport(path: string, block: string): Promise<{ backedUp: boolean }> {
-  const existing = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+  const target = await realpath(path).catch(() => path);
+  const bytes = await readFile(target).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  const next = applyBlock(existing, block);
+  if (bytes !== undefined && !(await access(target, constants.W_OK).then(() => true, () => false))) {
+    throw new ExportError(`${target} is read-only; nothing was written.`);
+  }
+  // latin1 maps every byte to one character, so splicing text into it cannot damage other bytes.
+  const existing = bytes?.toString("latin1");
+  const next = applyBlock(existing, Buffer.from(block, "utf8").toString("latin1"));
   if (next === existing) return { backedUp: false };
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(target), { recursive: true });
   let backedUp = false;
-  if (existing !== undefined && existing.trim() !== "") {
-    const backup = `${path}.bak`;
+  if (bytes !== undefined && !isBlank(existing!)) {
+    const backup = `${target}.bak`;
     if (!(await stat(backup).then(() => true, () => false))) {
-      await copyFile(path, backup);
+      await copyFile(target, backup);
       backedUp = true;
     }
   }
-  const temp = `${path}.${process.pid}.tmp`;
+  const temp = `${target}.${process.pid}.tmp`;
   try {
-    await writeFile(temp, next);
-    if (existing !== undefined) await chmod(temp, (await stat(path)).mode & 0o777);
-    await rename(temp, path);
+    await writeFile(temp, Buffer.from(next, "latin1"));
+    if (bytes !== undefined) await chmod(temp, (await stat(target)).mode & 0o777);
+    await rename(temp, target);
   } catch (error) {
     await rm(temp, { force: true });
     throw error;
@@ -176,5 +201,5 @@ export async function writeExport(path: string, block: string): Promise<{ backed
 
 /** Rule texts that look like instructions aimed at an agent rather than a convention: worth a look before export. */
 export function suspiciousRules(rules: Rule[]): Rule[] {
-  return rules.filter((r) => /https?:\/\/|\$\(|\|\s*(?:ba)?sh\b|\b(?:curl|wget|eval|sudo)\b|ignore (?:all |any )?(?:previous|prior|above)|<\|[a-z_]+\|>|\b(?:system|assistant) prompt\b/i.test(r.description));
+  return rules.filter((r) => /https?:\/\/|\$\(|\|\s*(?:ba)?sh\b|\b(?:curl|wget|eval|sudo|chmod|chown|powershell|iex|npx)\b|\brm\s+-[a-z]*[rf]|\bbase64\s+(?:-d|--decode)\b|\b(?:pip3?|npm|pnpm|yarn|brew|apt(?:-get)?|gem)\s+(?:i|install|add)\b|ignore (?:all |any )?(?:previous|prior|above)|<\|[a-z_]+\|>|\b(?:system|assistant) prompt\b/i.test(r.description));
 }

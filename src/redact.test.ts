@@ -121,4 +121,29 @@ describe("createRedactor at the prompt boundary", () => {
     }
     expect(r('password = "correcthorsebatterystaple"').text).toBe('password = "[REDACTED:secret]"');
   });
+
+  it("masks GitLab, SendGrid, Slack webhook and app, DigitalOcean and Twilio keys", () => {
+    const hex32 = "0123456789abcdef0123456789abcdef";
+    const cases = [
+      ["glpat", "abcdefghijklmnopqrst12"].join("-"),
+      ["SG", "abcdefghijklmnop1234", "abcdefghijklmnop5678"].join("."),
+      ["https:/", "hooks.slack.com", "services", "T0000000", "B0000000", "abcdefghijklmnopqrstuvwx"].join("/"),
+      ["xapp", "1", "A0000000000", "1234567890", "abcdef1234567890"].join("-"),
+      ["dop", "v1", hex32 + hex32].join("_"),
+      "SK" + hex32,
+    ];
+    for (const text of cases) {
+      expect(r(`use ${text} here`).text, text).toBe("use [REDACTED:token] here");
+    }
+  });
+
+  it("keeps environment-variable lookups and constant names", () => {
+    for (const text of [
+      "const apiKey = process.env.API_KEY_FOR_SERVICE_ACCOUNT_PRODUCTION;",
+      "api_key = os.environ.get_it_from_somewhere_else",
+      "SECRET_NAME = SERVICE_ACCOUNT_SECRET_NAME_PROD",
+    ]) {
+      expect(r(text).text, text).toBe(text);
+    }
+  });
 });
