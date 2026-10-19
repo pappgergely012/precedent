@@ -23,6 +23,12 @@ describe("cli errors", () => {
     expect(r.stderr).toContain("Warning: GITHUB_TOKEN is not set");
   });
 
+  it("does not need an Anthropic key for a dry run", () => {
+    const r = run(["mine", "nonsense", "--dry-run"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
+    expect(r.stderr).not.toContain("Set PRECEDENT_ANTHROPIC_API_KEY");
+    expect(r.stderr.trim().split("\n").pop()).toBe('Error: Invalid repo "nonsense", expected "owner/name"');
+  });
+
   it("still requires an Anthropic key", () => {
     const r = run(["mine", "o/r"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
     expect(r.status).toBe(1);
