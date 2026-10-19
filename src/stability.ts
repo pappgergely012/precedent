@@ -116,3 +116,87 @@ export function summarizeStability(allRuns: Rule[][], topN = 0): StabilitySummar
     unstableStrong: findUnstableStrong(runs),
   };
 }
+
+/** A rule worth relying on: well supported by several comments and reviewers (or very confident). */
+export const isCoreRule = (r: Rule): boolean =>
+  (r.sources.length >= 3 && new Set(r.sources.map((s) => s.reviewer)).size >= 2) || r.confidence >= 0.6;
+
+export interface CutStability {
+  /** Rules per run in this cut. */
+  ruleCounts: number[];
+  /** Mean pairwise overlap, rules matching when they share at least one cited comment. The gate. */
+  commentOverlap: number;
+  /** The same, counting only near-identical wording. Diagnostic: the model rephrases. */
+  wordingOverlap: number;
+  /** Mean Jaccard of the cited comment sets over matched pairs. Diagnostic: 1 means identical evidence. */
+  evidenceJaccard: number;
+}
+
+export interface StabilityCuts {
+  runs: number;
+  top: CutStability;
+  all: CutStability;
+  core: CutStability;
+  /**
+   * Of the core rules of each run, the share every other run also has (averaged over the runs
+   * taken as the reference, with the worst one). What a user relies on: the strong rules stay.
+   */
+  coreRetention: { mean: number; worst: number; coreRules: number[] };
+}
+
+const evidenceSetJaccard = (a: Rule, b: Rule): number => {
+  const sa = new Set(a.sources.map((s) => s.commentUrl));
+  const sb = new Set(b.sources.map((s) => s.commentUrl));
+  let shared = 0;
+  for (const u of sa) if (sb.has(u)) shared++;
+  return shared / (sa.size + sb.size - shared || 1);
+};
+
+function evidenceJaccard(runs: Rule[][]): number {
+  const scores: number[] = [];
+  for (let i = 0; i < runs.length; i++) {
+    for (let j = i + 1; j < runs.length; j++) {
+      const taken = new Set<number>();
+      for (const a of runs[i]!) {
+        const k = runs[j]!.findIndex((b, idx) => !taken.has(idx) && sharesComment(a, b));
+        if (k >= 0) {
+          taken.add(k);
+          scores.push(evidenceSetJaccard(a, runs[j]![k]!));
+        }
+      }
+    }
+  }
+  return scores.length ? mean(scores) : 0;
+}
+
+function cut(runs: Rule[][]): CutStability {
+  return {
+    ruleCounts: runs.map((r) => r.length),
+    commentOverlap: mean(pairwise(runs, sharesComment)),
+    wordingOverlap: mean(pairwise(runs, similarWording)),
+    evidenceJaccard: evidenceJaccard(runs),
+  };
+}
+
+/**
+ * Overlap at three cuts of the same runs: the top `topN` rules, every rule, and the core rules
+ * only. If the full lists agree far better than the top-N cut, the variance is in the ranking;
+ * if not, it is in what the model extracts.
+ */
+export function stabilityCuts(allRuns: Rule[][], topN = 10): StabilityCuts {
+  const core = allRuns.map((r) => r.filter(isCoreRule));
+  const retention = core.map((rules, i) => {
+    if (rules.length === 0) return undefined;
+    const others = allRuns.filter((_, j) => j !== i);
+    const kept = rules.filter((rule) => others.every((run) => run.some((r) => sharesComment(rule, r))));
+    return kept.length / rules.length;
+  });
+  const defined = retention.filter((x): x is number => x !== undefined);
+  return {
+    runs: allRuns.length,
+    top: cut(allRuns.map((r) => r.slice(0, topN))),
+    all: cut(allRuns),
+    core: cut(core),
+    coreRetention: { mean: defined.length ? mean(defined) : 1, worst: defined.length ? Math.min(...defined) : 1, coreRules: core.map((r) => r.length) },
+  };
+}

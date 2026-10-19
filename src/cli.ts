@@ -10,7 +10,7 @@ import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
-import { summarizeStability } from "./stability.js";
+import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
@@ -172,13 +172,18 @@ async function main(): Promise<void> {
       results.push(await extractRules(comments, llm, { maxComments: intFlag("max-comments", 1000), cache: pinned }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
+    const cuts = stabilityCuts(results, top);
     const s = summarizeStability(results, top);
     const f = (n: number) => n.toFixed(2);
-    console.log(`\nTop ${top} per run, ${values["pin-extraction"] ? "extraction pinned after run 1" : "nothing pinned"}.`);
-    console.log(`Rule counts per run: ${s.ruleCounts.join(", ")}`);
-    console.log(`Mean pairwise overlap (rules match on a shared cited comment or near-identical wording): ${f(s.meanOverlap)}, worst pair ${f(s.minOverlap)}`);
-    console.log(`  shared cited comment only: ${f(s.meanCommentOverlap)}   near-identical wording only: ${f(s.meanWordingOverlap)}`);
-    console.log(`Rules of run 1 found in every other run: ${s.inAllRuns}/${s.ruleCounts[0]}, in at least half: ${s.inMajority}/${s.ruleCounts[0]}`);
+    const row = (label: string, c: (typeof cuts)["top"]) =>
+      console.log(`  ${label.padEnd(10)} rules per run ${c.ruleCounts.join("/").padEnd(10)} overlap ${f(c.commentOverlap)}   (wording only ${f(c.wordingOverlap)}, evidence Jaccard of matched rules ${f(c.evidenceJaccard)})`);
+    console.log(`\n${runs} runs, ${values["pin-extraction"] ? "extraction pinned after run 1" : "nothing pinned"}.`);
+    console.log("Mean pairwise overlap; rules match when they share a cited comment:");
+    row(`top ${top}`, cuts.top);
+    row("all rules", cuts.all);
+    row("core rules", cuts.core);
+    console.log(`Core rules (3+ comments from 2+ reviewers, or confidence 0.6+): ${cuts.coreRetention.coreRules.join("/")} per run; the share of a run's core rules that every other run also has: mean ${f(cuts.coreRetention.mean)}, worst ${f(cuts.coreRetention.worst)}`);
+    console.log(`Top ${top}: rules of run 1 found in every other run ${s.inAllRuns}/${s.ruleCounts[0]}, in at least half ${s.inMajority}/${s.ruleCounts[0]}`);
     if (s.unstableStrong.length > 0) {
       console.log(`Rules with 3+ comments that appear in fewer than 2 runs (${s.unstableStrong.length}):`);
       for (const u of s.unstableStrong) console.log(`  - ${u.description} (${u.comments} comments, in ${u.runsPresent} run${u.runsPresent === 1 ? "" : "s"})`);
@@ -186,8 +191,8 @@ async function main(): Promise<void> {
     const usage = llm.usage?.();
     if (usage) console.log(`Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens.`);
     if (values.out) {
-      await writeFile(values.out, `${JSON.stringify({ repo, top, pinnedExtraction: !!pinned, runs: results.map((r) => r.slice(0, top)) }, null, 2)}\n`);
-      console.log(`Wrote the ${runs} runs to ${values.out}`);
+      await writeFile(values.out, `${JSON.stringify({ repo, top, pinnedExtraction: !!pinned, runs: results }, null, 2)}\n`);
+      console.log(`Wrote every rule of the ${runs} runs to ${values.out}`);
     }
   } else if (command === "review" && (values.diff || (repo && prArg))) {
     requireAnthropicKey();
