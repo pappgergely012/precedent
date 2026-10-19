@@ -10,7 +10,16 @@ const RULES: { kind: RedactionKind; pattern: RegExp; replace: string | ((match: 
   { kind: "private-key", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, replace: "[REDACTED:private-key]" },
   { kind: "token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bAIza[A-Za-z0-9_-]{35}\b/g, replace: "[REDACTED:token]" },
+  { kind: "token", pattern: /\bnpm_[A-Za-z0-9]{36}\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, replace: "[REDACTED:token]" },
+  {
+    // 40-character AWS secret access key: mixed case with a digit, so git SHAs (lowercase hex) and plain words do not match
+    kind: "token",
+    pattern: /(?<![A-Za-z0-9/+=_-])(?=[A-Za-z0-9/+]*[A-Z])(?=[A-Za-z0-9/+]*[a-z])(?=[A-Za-z0-9/+]*\d)[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=_-])/g,
+    replace: "[REDACTED:token]",
+  },
   { kind: "token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: "[REDACTED:token]" },
   { kind: "token", pattern: /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{20,}/gi, replace: (_m, prefix) => `${prefix}[REDACTED:token]` },
@@ -20,8 +29,10 @@ const RULES: { kind: RedactionKind; pattern: RegExp; replace: string | ((match: 
     kind: "secret-assignment",
     // name = value, with a long value made of token characters only (no spaces, quotes or parentheses),
     // so prose and code that merely mention a password or a token are left alone
-    pattern: /\b((?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret|access[_-]?key)\w*\s*[:=]\s*)(["']?)[A-Za-z0-9_\-/+=.]{16,}\2/gi,
-    replace: (_m, name, quote) => `${name}${quote}[REDACTED:secret]${quote}`,
+    // The value must not continue into a call or an index: `api_key = get_key()` is code, not a secret.
+    pattern: /\b(\w*(?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\w*\s*[:=]\s*)(["']?)(?![A-Za-z_]\w*\s*[(\[])([A-Za-z0-9_\-/+=.]{16,})\2(?![A-Za-z0-9_\-/+=.(\[])/gi,
+    // An unquoted all-lowercase value is a variable or constant name, not a random secret: keep it.
+    replace: (m, name, quote, value) => (quote === "" && /^[a-z_]+$/.test(value) ? m : `${name}${quote}[REDACTED:secret]${quote}`),
   },
 ];
 
@@ -32,9 +43,10 @@ export function redactText(text: string): { text: string; counts: RedactionCount
   let out = text;
   for (const { kind, pattern, replace } of RULES) {
     out = out.replace(pattern, (...args: unknown[]) => {
-      counts[kind] = (counts[kind] ?? 0) + 1;
       const match = args[0] as string;
-      return typeof replace === "string" ? replace : replace(match, ...(args.slice(1) as string[]));
+      const result = typeof replace === "string" ? replace : replace(match, ...(args.slice(1) as string[]));
+      if (result !== match) counts[kind] = (counts[kind] ?? 0) + 1;
+      return result;
     });
   }
   return { text: out, counts };
