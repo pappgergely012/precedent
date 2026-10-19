@@ -92,3 +92,60 @@ export async function fetchReviewComments(
   }
   return comments;
 }
+
+export interface PullRequestOptions {
+  token?: string;
+  fetchImpl?: typeof fetch;
+}
+
+function checkRepo(repo: string): void {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    throw new Error(`Invalid repo "${repo}", expected "owner/name"`);
+  }
+}
+
+function apiHeaders(token: string | undefined, accept: string): Record<string, string> {
+  const headers: Record<string, string> = { Accept: accept, "X-GitHub-Api-Version": "2022-11-28" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+/** Fetch the unified diff of a pull request. */
+export async function fetchPullDiff(repo: string, prNumber: number, opts: PullRequestOptions = {}): Promise<string> {
+  checkRepo(repo);
+  const doFetch = opts.fetchImpl ?? fetch;
+  const res = await doFetch(`${API}/repos/${repo}/pulls/${prNumber}`, {
+    headers: apiHeaders(opts.token, "application/vnd.github.diff"),
+  });
+  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${repo}#${prNumber}: ${await res.text()}`);
+  return res.text();
+}
+
+export interface ReviewCommentInput {
+  path: string;
+  line: number;
+  body: string;
+}
+
+/** Post one pull request review with inline comments on the added lines. */
+export async function postPullReview(
+  repo: string,
+  prNumber: number,
+  body: string,
+  comments: ReviewCommentInput[],
+  opts: PullRequestOptions = {},
+): Promise<string> {
+  checkRepo(repo);
+  const doFetch = opts.fetchImpl ?? fetch;
+  const res = await doFetch(`${API}/repos/${repo}/pulls/${prNumber}/reviews`, {
+    method: "POST",
+    headers: { ...apiHeaders(opts.token, "application/vnd.github+json"), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event: "COMMENT",
+      body,
+      comments: comments.map((c) => ({ path: c.path, line: c.line, side: "RIGHT", body: c.body })),
+    }),
+  });
+  if (!res.ok) throw new Error(`GitHub API ${res.status} posting review to ${repo}#${prNumber}: ${await res.text()}`);
+  return z.object({ html_url: z.string() }).parse(await res.json()).html_url;
+}
