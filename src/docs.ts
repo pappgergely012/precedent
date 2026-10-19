@@ -38,6 +38,62 @@ export interface DocsOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+const MAX_GUIDE_FILES = 12;
+const MAX_GUIDE_BYTES = 100_000;
+const GUIDE_EXTENSIONS = /\.(md|mdx|rst|txt|adoc)$/i;
+/** Files that are always worth reading when they exist at the root. */
+const ROOT_GUIDES = /^(contributing[^/]*|agents\.md|claude\.md|\.cursorrules|style[^/]*|\.github\/(contributing[^/]*|pull_request_template[^/]*))$/i;
+const NOISE = /(^|\/)(node_modules|vendor|third_party|tests?|__tests__|fixtures?|locale|locales|i18n|translations?|releases?|changelog[^/]*|history[^/]*)(\/|$)/i;
+const TOPIC = /(contributing|coding[-_ ]?style|style[-_ ]?guide|conventions|guidelines|submitting|committing|code[-_ ]?review|pull[-_ ]?request|working[-_ ]with[-_ ]git|unit[-_ ]tests|writing[-_ ](code|documentation))/i;
+
+export interface TreeEntry {
+  path: string;
+  type: string;
+  size?: number;
+}
+
+/**
+ * Pick the files of a repository tree that most likely state its conventions: the usual root
+ * files, then documents whose path or name is about contributing, style, patches or review.
+ * Deeper and bigger files rank lower; at most `max` are returned.
+ */
+export function selectGuidePaths(tree: TreeEntry[], max = MAX_GUIDE_FILES): string[] {
+  const scored: { path: string; score: number }[] = [];
+  for (const e of tree) {
+    if (e.type !== "blob" || (e.size ?? 0) > MAX_GUIDE_BYTES || NOISE.test(e.path)) continue;
+    if (ROOT_GUIDES.test(e.path)) {
+      scored.push({ path: e.path, score: 1000 });
+      continue;
+    }
+    if (!GUIDE_EXTENSIONS.test(e.path) || e.path.split("/").length > 6) continue;
+    const name = e.path.split("/").pop()!;
+    const nameHit = TOPIC.test(name);
+    const dirHit = TOPIC.test(e.path.slice(0, e.path.length - name.length));
+    if (!nameHit && !dirHit) continue;
+    const depth = e.path.split("/").length;
+    scored.push({ path: e.path, score: (nameHit ? 60 : 20) + (dirHit ? 20 : 0) - depth });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+    .slice(0, max)
+    .map((s) => s.path);
+}
+
+/** Paths to read: found by scanning the repository tree, or the fixed list when the tree is unavailable. */
+async function guidePaths(repo: string, doFetch: typeof fetch, headers: Record<string, string>, sleep?: (ms: number) => Promise<void>): Promise<string[]> {
+  try {
+    const res = await fetchWithRetry(doFetch, `${API}/repos/${repo}/git/trees/HEAD?recursive=1`, { headers: { ...headers, Accept: "application/vnd.github+json" } }, { sleep });
+    if (res.ok) {
+      const body = z.object({ tree: z.array(z.object({ path: z.string(), type: z.string(), size: z.number().optional() })) }).parse(await res.json());
+      const found = selectGuidePaths(body.tree);
+      if (found.length > 0) return found;
+    }
+  } catch {
+    // fall through to the fixed list
+  }
+  return GUIDE_PATHS;
+}
+
 /** Fetch the guide files that exist (missing files are skipped), each capped in size. */
 export async function fetchGuideDocs(repo: string, opts: DocsOptions = {}): Promise<GuideDoc[]> {
   const doFetch = opts.fetchImpl ?? fetch;
@@ -48,10 +104,9 @@ export async function fetchGuideDocs(repo: string, opts: DocsOptions = {}): Prom
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
 
   const docs: GuideDoc[] = [];
-  for (const path of GUIDE_PATHS) {
+  for (const path of await guidePaths(repo, doFetch, headers, opts.sleep)) {
     const res = await fetchWithRetry(doFetch, `${API}/repos/${repo}/contents/${path}`, { headers }, { sleep: opts.sleep });
-    if (res.status === 404) continue;
-    if (!res.ok) continue; // a guide we cannot read is not worth failing the run for
+    if (!res.ok) continue; // missing, or a guide we cannot read: not worth failing the run for
     const text = (await res.text()).slice(0, MAX_DOC_CHARS);
     if (text.trim()) docs.push({ path, text });
   }
