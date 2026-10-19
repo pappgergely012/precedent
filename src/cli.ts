@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     const TOP = 10;
     const core = rules.filter((r) => ruleTier(r) === "core").length;
     if (rules.length > 0) {
-      console.log(`${rules.length} rules: ${core} core (3+ comments from 2+ reviewers, the ones that come back run after run) and ${rules.length - core} emerging (thinner evidence, the first to change when you mine again).`);
+      console.log(`${rules.length} rules: ${core} core (3+ comments from 2+ reviewers) and ${rules.length - core} emerging (thinner evidence).`);
     }
     if (rules.length > TOP) console.log(`Showing the top ${TOP} of ${rules.length} rules.`);
     rules.slice(0, TOP).forEach((rule, i) => {
