@@ -58,6 +58,35 @@ describe("cli export", () => {
     expect(text).toContain("Use gate() in tests.");
   });
 
+  it("refuses a file with a stale start marker and leaves it untouched", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const out = join(dir, "AGENTS.md");
+    const original = "Intro\n<!-- precedent:start (stale) -->\nMY NOTES\n";
+    writeFileSync(out, original);
+    const r = run(["export", "--format", "agents", "--rules", rulesFile(dir), "--out", out]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("Nothing was written");
+    expect(readFileSync(out, "utf8")).toBe(original);
+  });
+
+  it("keeps the original as .bak on the first change", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const out = join(dir, "AGENTS.md");
+    writeFileSync(out, "# Mine\n");
+    const r = run(["export", "--format", "agents", "--rules", rulesFile(dir), "--out", out]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("AGENTS.md.bak");
+    expect(readFileSync(`${out}.bak`, "utf8")).toBe("# Mine\n");
+  });
+
+  it("rejects bad numeric flags in one line, never with a stack trace", () => {
+    for (const args of [["--max-rules", "-3"], ["--max-rules", "0"], ["--min-confidence", "5"]]) {
+      const r = run(["export", "--format", "claude", ...args]);
+      expect(r.status, args.join(" ")).toBe(1);
+      expect(r.stderr, args.join(" ")).not.toMatch(/\n\s+at /);
+    }
+  });
+
   it("explains a missing rules file and a bad format in one line", () => {
     const missing = run(["export", "--format", "claude", "--rules", "/nonexistent/rules.json"]);
     expect(missing.status).toBe(1);
