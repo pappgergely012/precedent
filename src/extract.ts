@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ReviewComment } from "./github.js";
 import type { PrincipleCache } from "./cache.js";
+import { wordJaccard } from "./lexical.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -22,6 +23,11 @@ export interface ExtractOptions {
   minRecentComments?: number;
   /** Extraction batches sent to the model at the same time. */
   concurrency?: number;
+  /**
+   * Group candidate principles that are worded almost identically before the model merges them,
+   * so those groups are a function of the text and not of one model sample. Off by default.
+   */
+  preMerge?: boolean;
   /** Per-comment answers from earlier runs; comments found in it are not sent to the model again. */
   cache?: PrincipleCache;
   /** Current time, injectable for tests. */
@@ -159,6 +165,72 @@ export async function mergeCandidates(
     rules = next;
   }
   return rules;
+}
+
+/** Clusters of candidates (as lists of comment ids) with near-identical principles, at most `maxSize` each. */
+export function preClusters(
+  candidates: { id: number; principle: string }[],
+  opts: { minJaccard?: number; minShared?: number; maxSize?: number } = {},
+): number[][] {
+  const { minJaccard = 0.7, minShared = 3, maxSize = 8 } = opts;
+  const pairs: { a: number; b: number; s: number }[] = [];
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      const { jaccard, shared } = wordJaccard(candidates[i]!.principle, candidates[j]!.principle);
+      if (jaccard >= minJaccard && shared >= minShared) pairs.push({ a: i, b: j, s: jaccard });
+    }
+  }
+  // Closest pairs first; a union that would make a cluster larger than maxSize is skipped.
+  pairs.sort((x, y) => y.s - x.s || x.a - y.a || x.b - y.b);
+  const parent = candidates.map((_, i) => i);
+  const size = candidates.map(() => 1);
+  const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x]!)));
+  for (const { a, b } of pairs) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb || size[ra]! + size[rb]! > maxSize) continue;
+    parent[ra] = rb;
+    size[rb]! += size[ra]!;
+  }
+  const groups = new Map<number, number[]>();
+  candidates.forEach((c, i) => {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r)!.push(c.id);
+  });
+  return [...groups.values()].filter((g) => g.length > 1).map((g) => g.sort((x, y) => x - y));
+}
+
+/**
+ * Merge with the near-identical candidates pre-grouped: the model sees one representative (the
+ * member with the lowest comment id) per cluster plus the remaining candidates, and its groups
+ * are expanded back to every member. A cluster the model does not group with anything stays a
+ * rule of its own, since it already has two or more comments.
+ */
+export async function mergeWithPreClusters(
+  candidates: { id: number; principle: string }[],
+  llm: Llm,
+  onProgress: (message: string) => void = () => {},
+): Promise<MergedRule[]> {
+  const clusters = preClusters(candidates);
+  if (clusters.length === 0) return mergeCandidates(candidates, llm, onProgress);
+  const membersOf = new Map(clusters.map((c) => [c[0]!, c]));
+  const absorbed = new Set(clusters.flatMap((c) => c.slice(1)));
+  const principleOf = new Map(candidates.map((c) => [c.id, c.principle]));
+  const representatives = candidates.filter((c) => !absorbed.has(c.id));
+  onProgress(`Pre-merged ${clusters.length} clusters of near-identical candidates (${absorbed.size} candidates folded into their representatives)`);
+
+  const merged = await mergeCandidates(representatives, llm, onProgress);
+  const expand = (ids: number[]) => ids.flatMap((id) => membersOf.get(id) ?? [id]);
+  const used = new Set<number>();
+  const out: MergedRule[] = merged.map((m) => {
+    m.commentIds.forEach((id) => used.add(id));
+    return { ...m, commentIds: [...new Set(expand(m.commentIds))] };
+  });
+  for (const c of clusters) {
+    if (!used.has(c[0]!)) out.push({ description: principleOf.get(c[0]!)!, scope: [], commentIds: c });
+  }
+  return out;
 }
 
 const DedupeSchema = z.object({
@@ -479,7 +551,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   // Stable input order keeps chunking identical between runs of the same data.
   candidates.sort((a, b) => a.id - b.id);
   log(`Merging ${candidates.length} candidate rules`);
-  const merged = await mergeCandidates(candidates, llm, log);
+  const merged = opts.preMerge ? await mergeWithPreClusters(candidates, llm, log) : await mergeCandidates(candidates, llm, log);
   stats.merged = merged.length;
   log(`Merged into ${merged.length} rules`);
 
