@@ -103,4 +103,15 @@ describe("extractRules with a cache", () => {
     await extractRules([comment(1), comment(2)], next.llm, { cache });
     expect(next.state.askedIds.sort()).toEqual([1, 2]);
   });
+
+  it("counts hits so a run answered from the cache can be told apart from a fresh one", () => {
+    const cache = memoryCache();
+    cache.set(1, "text", "rule");
+    cache.set(2, "text two", null);
+    cache.get(1, "text");
+    cache.get(2, "text two");
+    cache.get(3, "never stored");
+    cache.get(1, "text changed");
+    expect(cache.hits()).toBe(2);
+  });
 });

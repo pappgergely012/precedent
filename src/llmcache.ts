@@ -56,9 +56,9 @@ export async function fileStore(path: string): Promise<ResponseStore> {
  * calls that deliberately repeat a prompt to vote (`--docs`, consensus) still get independent
  * answers on the first run and the same answers on a replay.
  */
-export function requestKey(prompt: string, schema: z.ZodTypeAny, model: string, occurrence: number): string {
+export function requestKey(prompt: string, schema: z.ZodTypeAny, model: string, occurrence: number, version = STAGE_CACHE_VERSION): string {
   const shape = JSON.stringify(z.toJSONSchema(schema));
-  const hash = createHash("sha256").update(`${STAGE_CACHE_VERSION}\n${model}\n${shape}\n${prompt}`).digest("hex").slice(0, 24);
+  const hash = createHash("sha256").update(`${version}\n${model}\n${shape}\n${prompt}`).digest("hex").slice(0, 24);
   return `${hash}#${occurrence}`;
 }
 
@@ -69,7 +69,7 @@ export type CachedLlm = Llm & { cacheStats(): CacheStats; save(): Promise<void> 
  * whole prompt, this covers each stage (extraction, merge, audit, dedupe, docs) alike: re-mining
  * unchanged data asks the model nothing and gives the same rules.
  */
-export function cachedLlm(inner: Llm, store: ResponseStore, model: string): CachedLlm {
+export function cachedLlm(inner: Llm, store: ResponseStore, model: string, version = STAGE_CACHE_VERSION): CachedLlm {
   const stats: CacheStats = { hits: 0, misses: 0 };
   const seen = new Map<string, number>();
   return {
@@ -77,7 +77,7 @@ export function cachedLlm(inner: Llm, store: ResponseStore, model: string): Cach
     cacheStats: () => ({ ...stats }),
     save: () => store.save(),
     async parse(prompt, schema) {
-      const base = requestKey(prompt, schema, model, 0).split("#")[0]!;
+      const base = requestKey(prompt, schema, model, 0, version).split("#")[0]!;
       const occurrence = seen.get(base) ?? 0;
       seen.set(base, occurrence + 1);
       const key = `${base}#${occurrence}`;
@@ -98,13 +98,13 @@ export function cachedLlm(inner: Llm, store: ResponseStore, model: string): Cach
 }
 
 /** A client that answers only from recorded responses and fails on anything new (for CI without credit). */
-export function replayLlm(store: ResponseStore, model: string): CachedLlm {
+export function replayLlm(store: ResponseStore, model: string, version = STAGE_CACHE_VERSION): CachedLlm {
   const refuse: Llm = {
     async parse() {
       throw new Error("No recorded response for this request; re-record the fixture.");
     },
   };
-  return cachedLlm(refuse, store, model);
+  return cachedLlm(refuse, store, model, version);
 }
 
 export function describeCache(stats: CacheStats): string {

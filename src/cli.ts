@@ -131,12 +131,13 @@ async function main(): Promise<void> {
     const model = process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
     // With --cache, every model answer (extraction, merge, audit, dedupe, --docs) is kept next to the principle cache.
     const llm = cachePath ? cachedLlm(anthropicLlm(), await fileStore(`${cachePath}.responses.json`), model) : anthropicLlm();
+    const mineCache = cachePath ? await fileCache(cachePath, model) : undefined;
     let rules = await extractRules(sendable, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
       preMerge: values["pre-merge"],
-      cache: cachePath ? await fileCache(cachePath, model) : undefined,
+      cache: mineCache,
       onProgress: progress,
     });
     if (values.verify) {
@@ -164,13 +165,14 @@ async function main(): Promise<void> {
       console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
       for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
     }
-    if ("cacheStats" in llm) {
-      await (llm as ReturnType<typeof cachedLlm>).save();
-      console.log(`\n${describeCache((llm as ReturnType<typeof cachedLlm>).cacheStats())}`);
-    }
+    const principleCache = cachePath ? mineCache : undefined;
+    const stageStats = "cacheStats" in llm ? (llm as ReturnType<typeof cachedLlm>).cacheStats() : undefined;
+    if ("cacheStats" in llm) await (llm as ReturnType<typeof cachedLlm>).save();
+    // Stability and gate runs must be fresh: this line lets a harness void a run that was answered from a cache.
+    console.log(`\nCache hits: ${(principleCache?.hits() ?? 0) + (stageStats?.hits ?? 0)}${stageStats ? ` (${describeCache(stageStats)})` : " (no cache in use)"}`);
     const usage = llm.usage?.();
     if (usage) {
-      console.log(`${"cacheStats" in llm ? "" : "\n"}Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
+      console.log(`Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
     }
     if (values.out) {
       await writeRulesFile(values.out, repo, rules, documentedOnly);
@@ -238,6 +240,7 @@ async function main(): Promise<void> {
     const row = (label: string, c: (typeof cuts)["top"]) =>
       console.log(`  ${label.padEnd(10)} rules per run ${c.ruleCounts.join("/").padEnd(10)} overlap ${f(c.commentOverlap)}   (wording only ${f(c.wordingOverlap)}, evidence Jaccard of matched rules ${f(c.evidenceJaccard)})`);
     console.log(`\n${runs} runs, ${values["pin-extraction"] ? "extraction pinned after run 1" : "nothing pinned"}.`);
+    console.log(`Cache hits: ${pinned?.hits() ?? 0}${pinned ? " (extraction answers re-used from run 1; this is not a fresh-mining measurement)" : " (no cache in use)"}`);
     console.log("Mean pairwise overlap; rules match when they share a cited comment:");
     row(`top ${top}`, cuts.top);
     row("all rules", cuts.all);
@@ -251,7 +254,7 @@ async function main(): Promise<void> {
     const usage = llm.usage?.();
     if (usage) console.log(`Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens.`);
     if (values.out) {
-      await writeFile(values.out, `${JSON.stringify({ repo, top, pinnedExtraction: !!pinned, runs: results }, null, 2)}\n`);
+      await writeFile(values.out, `${JSON.stringify({ repo, top, pinnedExtraction: !!pinned, cacheHits: pinned?.hits() ?? 0, runs: results }, null, 2)}\n`);
       console.log(`Wrote every rule of the ${runs} runs to ${values.out}`);
     }
   } else if (command === "review" && (values.diff || (repo && prArg))) {

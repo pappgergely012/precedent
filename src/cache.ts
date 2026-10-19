@@ -18,6 +18,8 @@ export interface PrincipleCache {
   get(commentId: number, text: string): string | null | undefined;
   set(commentId: number, text: string, principle: string | null): void;
   save(): Promise<void>;
+  /** How many lookups found an answer (a run that uses the cache is not a fresh run). */
+  hits(): number;
 }
 
 const keyOf = (text: string, model: string) =>
@@ -29,11 +31,15 @@ const FileSchema = z.object({
 });
 
 function build(model: string, entries: Map<number, { k: string; p: string | null }>, save: () => Promise<void>): PrincipleCache {
+  let hitCount = 0;
   return {
     get(id, text) {
       const hit = entries.get(id);
-      return hit && hit.k === keyOf(text, model) ? hit.p : undefined;
+      if (!hit || hit.k !== keyOf(text, model)) return undefined;
+      hitCount++;
+      return hit.p;
     },
+    hits: () => hitCount,
     set(id, text, principle) {
       entries.set(id, { k: keyOf(text, model), p: principle });
     },
