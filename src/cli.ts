@@ -7,12 +7,13 @@ import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js"
 import { anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
+import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
 import { summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--verify]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--verify] [--docs]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer]
   precedent stability <owner/repo> [--runs N] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post]
@@ -28,6 +29,7 @@ const { positionals, values } = parseArgs({
     diff: { type: "string" },
     post: { type: "boolean" },
     verify: { type: "boolean" },
+    docs: { type: "boolean" },
     "max-pages": { type: "string" },
     runs: { type: "string" },
     format: { type: "string" },
@@ -87,6 +89,18 @@ async function main(): Promise<void> {
       rules = await verifyRules(repo, rules, { token: process.env.GITHUB_TOKEN, minOccurrences: intFlag("min-occurrences", 2) });
       console.log(`Verified citations: kept ${rules.length} of ${before} rules.`);
     }
+    let documentedOnly: DocRule[] | undefined;
+    if (values.docs && rules.length > 0) {
+      const docs = await fetchGuideDocs(repo, { token: process.env.GITHUB_TOKEN });
+      if (docs.length === 0) {
+        console.log("No contributor guide found (CONTRIBUTING.md, AGENTS.md, ...); skipping the documented-vs-enforced check.");
+      } else {
+        progress(`Reading ${docs.length} guide file(s): ${docs.map((d) => d.path).join(", ")}`);
+        const docRules = await extractDocRules(docs, anthropicLlm());
+        ({ rules, documentedOnly } = await reconcileRules(rules, docRules, anthropicLlm()));
+        progress(`${docRules.length} documented rules; ${rules.filter((r) => r.origin === "both").length} also enforced, ${rules.filter((r) => r.origin === "conflict").length} possible conflicts`);
+      }
+    }
     if (rules.length === 0) {
       console.log("No recurring rules found.");
     }
@@ -98,9 +112,17 @@ async function main(): Promise<void> {
       const flag = isSingleReviewer(rule) ? ", single reviewer" : "";
       console.log(`   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`);
       for (const s of rule.sources.slice(0, 3)) console.log(`   - #${s.prNumber} @${s.reviewer} ${s.commentUrl}`);
+      const ref = rule.docRefs?.[0];
+      if (rule.origin === "both" && ref) console.log(`   documented in ${ref.path}: "${ref.quote.slice(0, 120)}"`);
+      else if (rule.origin === "conflict" && ref) console.log(`   POSSIBLE CONFLICT with ${ref.path}: "${ref.quote.slice(0, 120)}"`);
+      else if (rule.origin === "enforced") console.log("   enforced in reviews, not written in the guide");
     });
+    if (documentedOnly && documentedOnly.length > 0) {
+      console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
+      for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
+    }
     if (values.out) {
-      await writeRulesFile(values.out, repo, rules);
+      await writeRulesFile(values.out, repo, rules, documentedOnly);
       console.log(`\nWrote ${rules.length} rules to ${values.out}`);
     }
   } else if (command === "export") {
