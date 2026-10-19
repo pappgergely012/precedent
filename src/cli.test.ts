@@ -96,3 +96,33 @@ describe("cli export", () => {
     expect(bad.stderr).toContain("--format must be one of");
   });
 });
+
+describe("cli help, version and early validation", () => {
+  it("prints usage for --help and help, and the package version for --version", () => {
+    for (const args of [["--help"], ["-h"], ["help"]]) {
+      const r = run(args);
+      expect(r.status, args.join(" ")).toBe(0);
+      expect(r.stdout).toContain("precedent mine <owner/repo>");
+    }
+    const v = run(["--version"]);
+    expect(v.status).toBe(0);
+    expect(v.stdout.trim()).toBe(JSON.parse(readFileSync("package.json", "utf8")).version);
+    expect(run(["-v"]).stdout.trim()).toBe(v.stdout.trim());
+  });
+
+  it("explains a missing rules file for review instead of printing ENOENT", () => {
+    const r = run(["review", "--diff", "/dev/null", "--rules", "/nonexistent/rules.json"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('Rules file /nonexistent/rules.json not found. Run "precedent mine owner/repo --out /nonexistent/rules.json" first.');
+    expect(r.stderr).not.toContain("ENOENT");
+  });
+
+  it("rejects --cache together with --no-cache before fetching anything, also for a dry run", () => {
+    for (const extra of [[], ["--dry-run"]]) {
+      const r = run(["mine", "o/r", "--cache", "c.json", "--no-cache", ...extra]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("--cache and --no-cache cannot be used together.");
+      expect(r.stdout).not.toContain("Fetched");
+    }
+  });
+});
