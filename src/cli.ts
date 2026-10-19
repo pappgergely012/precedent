@@ -8,6 +8,7 @@ import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
+import { cachedLlm, describeCache, fileStore } from "./llmcache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { applyBlock, renderBlock, type ExportFormat } from "./export.js";
 import { describeEstimate, estimateUsage } from "./estimate.js";
@@ -17,7 +18,7 @@ import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--pre-merge] [--dry-run] [--verify] [--docs] [--all]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--dry-run] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
   precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
@@ -34,6 +35,7 @@ const { positionals, values } = parseArgs({
     post: { type: "boolean" },
     verify: { type: "boolean" },
     cache: { type: "string" },
+    "no-cache": { type: "boolean" },
     top: { type: "string" },
     "pin-extraction": { type: "boolean" },
     docs: { type: "boolean" },
@@ -118,13 +120,17 @@ async function main(): Promise<void> {
       return;
     }
 
-    const llm = anthropicLlm();
+    if (values.cache && values["no-cache"]) fail("--cache and --no-cache cannot be used together.");
+    const cachePath = values["no-cache"] ? undefined : values.cache;
+    const model = process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
+    // With --cache, every model answer (extraction, merge, audit, dedupe, --docs) is kept next to the principle cache.
+    const llm = cachePath ? cachedLlm(anthropicLlm(), await fileStore(`${cachePath}.responses.json`), model) : anthropicLlm();
     let rules = await extractRules(sendable, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
       preMerge: values["pre-merge"],
-      cache: values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined,
+      cache: cachePath ? await fileCache(cachePath, model) : undefined,
       onProgress: progress,
     });
     if (values.verify) {
@@ -152,9 +158,13 @@ async function main(): Promise<void> {
       console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
       for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
     }
+    if ("cacheStats" in llm) {
+      await (llm as ReturnType<typeof cachedLlm>).save();
+      console.log(`\n${describeCache((llm as ReturnType<typeof cachedLlm>).cacheStats())}`);
+    }
     const usage = llm.usage?.();
     if (usage) {
-      console.log(`\nModel usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
+      console.log(`${"cacheStats" in llm ? "" : "\n"}Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
     }
     if (values.out) {
       await writeRulesFile(values.out, repo, rules, documentedOnly);
