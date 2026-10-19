@@ -31,6 +31,8 @@ export interface ExtractOptions {
   preMerge?: boolean;
   /** Per-comment answers from earlier runs; comments found in it are not sent to the model again. */
   cache?: PrincipleCache;
+  /** Extra detail for people debugging a run (for example the texts of dropped rules). Never changes the result. */
+  onDetail?: (message: string) => void;
   /** Current time, injectable for tests. */
   now?: Date;
   /** Called with a human-readable status line as the work advances. */
@@ -563,6 +565,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   let tooFewComments = 0;
   let tooFewPrs = 0;
   let droppedByFilter = 0;
+  const droppedTexts: string[] = [];
   merged.forEach((m, index) => {
     const sources = [...new Set(m.commentIds)].flatMap((id) => {
       const c = byId.get(id);
@@ -579,6 +582,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
     const reason = dropReason(m);
     if (reason) {
       droppedByFilter++;
+      droppedTexts.push(`${reason}: ${m.description}${m.scope.length ? ` (${m.scope.join(", ")})` : ""}`);
       return;
     }
     rules.push({
@@ -594,6 +598,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
     `Kept ${rules.length} of ${merged.length} merged rules; dropped ${tooFewComments} with fewer than ${minOccurrences} comments and ${tooFewPrs} with fewer than ${minPullRequests} distinct pull requests`,
   );
   if (droppedByFilter > 0) log(`Dropped ${droppedByFilter} rules that are not in English or are about tool-generated files`);
+  for (const text of droppedTexts) opts.onDetail?.(`  filtered: ${text}`);
   if (rules.length === 0) return rules;
 
   log(`Auditing ${rules.length} rules against the comments they cite`);

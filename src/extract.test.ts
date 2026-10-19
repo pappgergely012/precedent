@@ -394,3 +394,19 @@ describe("extractRules with a recorded model", () => {
     expect(replay.cacheStats()).toEqual({ hits: 3, misses: 0 });
   });
 });
+
+describe("extractRules detail output", () => {
+  const answers = () => [
+    { items: [{ id: 1, principle: "Ignore .claude/settings.local.json" }, { id: 2, principle: "Ignore the .claude local settings" }] },
+    { rules: [{ description: "Add settings.local.json to .gitignore in .claude", scope: [".claude/**"], commentIds: [1, 2] }] },
+  ];
+
+  it("lists the texts of filtered rules only when asked, and the result is the same either way", async () => {
+    const quiet = await extractRules([comment(1), comment(2)], fakeLlm(...answers()));
+    const lines: string[] = [];
+    const loud = await extractRules([comment(1), comment(2)], fakeLlm(...answers()), { onDetail: (m) => lines.push(m) });
+    expect(loud).toEqual(quiet);
+    expect(quiet).toEqual([]);
+    expect(lines).toEqual(["  filtered: tool-artefact: Add settings.local.json to .gitignore in .claude (.claude/**)"]);
+  });
+});

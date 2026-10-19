@@ -18,7 +18,7 @@ import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--dry-run] [--verify] [--docs] [--all]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--dry-run] [--verify] [--docs] [--all] [--verbose]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
   precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
@@ -139,6 +139,7 @@ async function main(): Promise<void> {
       preMerge: values["pre-merge"],
       cache: mineCache,
       onProgress: progress,
+      onDetail: values.verbose ? progress : undefined,
     });
     if (values.verify) {
       const before = rules.length;
