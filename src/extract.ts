@@ -65,34 +65,47 @@ ${lines}`;
 }
 
 /**
- * Merge candidates into rules. Large inputs are merged in chunks first, then the
- * partial rules are merged again so duplicates across chunks still collapse.
+ * Merge candidates into rules. Inputs larger than one call can answer are merged
+ * in chunks, and the resulting rules are merged again until they fit in a single
+ * call, so duplicates across chunks still collapse.
  */
 async function mergeCandidates(
   candidates: { id: number; principle: string }[],
   llm: Llm,
 ): Promise<MergedRule[]> {
-  if (candidates.length <= MERGE_BATCH_SIZE) {
-    return (await llm.parse(mergePrompt(candidates), MergedSchema)).rules;
-  }
-  const partial: MergedRule[] = [];
+  // First level: ids are real comment ids.
+  let rules: MergedRule[] = [];
+  let fitsOneCall = candidates.length <= MERGE_BATCH_SIZE;
   for (let i = 0; i < candidates.length; i += MERGE_BATCH_SIZE) {
     const chunk = candidates.slice(i, i + MERGE_BATCH_SIZE);
-    partial.push(...(await llm.parse(mergePrompt(chunk), MergedSchema)).rules);
+    rules.push(...(await llm.parse(mergePrompt(chunk), MergedSchema)).rules);
   }
-  // Second pass: each partial rule becomes a candidate, identified by its index.
-  const second = await llm.parse(
-    mergePrompt(partial.map((r, index) => ({ id: index, principle: r.description }))),
-    MergedSchema,
-  );
-  return second.rules.map((m) => {
-    const parts = [...new Set(m.commentIds)].flatMap((index) => (partial[index] ? [partial[index]] : []));
-    return {
-      description: m.description,
-      scope: m.scope.length ? m.scope : [...new Set(parts.flatMap((r) => r.scope))],
-      commentIds: parts.flatMap((r) => r.commentIds),
-    };
-  });
+  // Higher levels: each rule is a candidate identified by its index in its chunk.
+  while (!fitsOneCall) {
+    fitsOneCall = rules.length <= MERGE_BATCH_SIZE;
+    const sorted = [...rules].sort((a, b) => a.description.localeCompare(b.description));
+    const next: MergedRule[] = [];
+    for (let i = 0; i < sorted.length; i += MERGE_BATCH_SIZE) {
+      const chunk = sorted.slice(i, i + MERGE_BATCH_SIZE);
+      const out = await llm.parse(
+        mergePrompt(chunk.map((r, index) => ({ id: index, principle: r.description }))),
+        MergedSchema,
+      );
+      for (const m of out.rules) {
+        const parts = [...new Set(m.commentIds)].flatMap((index) => (chunk[index] ? [chunk[index]] : []));
+        if (parts.length === 0) continue;
+        next.push({
+          description: m.description,
+          scope: m.scope.length ? m.scope : [...new Set(parts.flatMap((r) => r.scope))],
+          commentIds: parts.flatMap((r) => r.commentIds),
+        });
+      }
+    }
+    // Stop when merging no longer shrinks the list, to avoid looping forever.
+    if (next.length >= rules.length) fitsOneCall = true;
+    rules = next;
+  }
+  return rules;
 }
 
 /** Turn review comments into rules, citing the comments each rule came from. */

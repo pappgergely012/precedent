@@ -24,7 +24,7 @@ export function anthropicLlm(opts: { model?: string; apiKey?: string } = {}): Ll
     async parse(prompt, schema) {
       const response = await client.messages.parse({
         model,
-        max_tokens: 8000,
+        max_tokens: 16000,
         messages: [{ role: "user", content: prompt }],
         output_config: { effort: "low", format: zodOutputFormat(schema) },
       });
