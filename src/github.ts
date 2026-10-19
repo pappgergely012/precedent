@@ -2,6 +2,54 @@ import { z } from "zod";
 
 const API = "https://api.github.com";
 
+/** A failed GitHub API call, with a message that is safe to show a user as is. */
+export class GitHubApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "GitHubApiError";
+  }
+}
+
+/** Turn a non-2xx response into a one-line, actionable error. */
+export async function githubApiError(res: Response, target: string, action = "reading"): Promise<GitHubApiError> {
+  const body = await res.text().catch(() => "");
+  const detail = (() => {
+    try {
+      const message = (JSON.parse(body) as { message?: unknown }).message;
+      return typeof message === "string" ? message : body.slice(0, 200);
+    } catch {
+      return body.slice(0, 200);
+    }
+  })();
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  const reset = Number(res.headers.get("x-ratelimit-reset"));
+  const resetAt = reset > 0 ? new Date(reset * 1000).toISOString().slice(11, 19) + " UTC" : undefined;
+
+  if (res.status === 401) {
+    return new GitHubApiError("GitHub rejected GITHUB_TOKEN (401): it is invalid or expired. Create a new token and try again.", 401);
+  }
+  if (res.status === 404) {
+    return new GitHubApiError(
+      `${target} not found (404). Check the name, or set GITHUB_TOKEN to a token with access if it is private.`,
+      404,
+    );
+  }
+  if (res.status === 429 || (res.status === 403 && (remaining === "0" || /rate limit/i.test(detail)))) {
+    const hint = process.env.GITHUB_TOKEN ? "Wait for the limit to reset" : "Set GITHUB_TOKEN to raise the limit";
+    return new GitHubApiError(
+      `GitHub API rate limit reached (${res.status})${resetAt ? `; resets at ${resetAt}` : ""}. ${hint}.`,
+      res.status,
+    );
+  }
+  if (res.status === 403) {
+    return new GitHubApiError(`GitHub denied ${action} ${target} (403): ${detail || "the token lacks permission"}.`, 403);
+  }
+  return new GitHubApiError(`GitHub API ${res.status} ${action} ${target}: ${detail}`, res.status);
+}
+
 /** A single pull request review comment, reduced to what rule mining needs. */
 export interface ReviewComment {
   id: number;
@@ -85,9 +133,7 @@ export async function fetchReviewComments(
     if (opts.since) params.set("since", opts.since);
 
     const res = await doFetch(`${API}/repos/${repo}/pulls/comments?${params}`, { headers });
-    if (!res.ok) {
-      throw new Error(`GitHub API ${res.status} for ${repo}: ${await res.text()}`);
-    }
+    if (!res.ok) throw await githubApiError(res, `Repository ${repo}`);
     const items = z.array(ApiCommentSchema).parse(await res.json());
 
     for (const c of items) {
@@ -136,7 +182,7 @@ export async function fetchPullDiff(repo: string, prNumber: number, opts: PullRe
   const res = await doFetch(`${API}/repos/${repo}/pulls/${prNumber}`, {
     headers: apiHeaders(opts.token, "application/vnd.github.diff"),
   });
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${repo}#${prNumber}: ${await res.text()}`);
+  if (!res.ok) throw await githubApiError(res, `Pull request ${repo}#${prNumber}`);
   return res.text();
 }
 
@@ -165,6 +211,6 @@ export async function postPullReview(
       comments: comments.map((c) => ({ path: c.path, line: c.line, side: "RIGHT", body: c.body })),
     }),
   });
-  if (!res.ok) throw new Error(`GitHub API ${res.status} posting review to ${repo}#${prNumber}: ${await res.text()}`);
+  if (!res.ok) throw await githubApiError(res, `a review on ${repo}#${prNumber}`, "posting");
   return z.object({ html_url: z.string() }).parse(await res.json()).html_url;
 }

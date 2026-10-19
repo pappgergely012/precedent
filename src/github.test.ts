@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchReviewComments } from "./github.js";
+import { GitHubApiError, fetchReviewComments } from "./github.js";
 
 const comment = (id: number, login: string, type = "User") => ({
   id,
@@ -63,5 +63,41 @@ describe("fetchReviewComments", () => {
   it("throws on API errors", async () => {
     const fetchImpl = (() => json({ message: "Not Found" }, 404)) as typeof fetch;
     await expect(fetchReviewComments("o/r", { fetchImpl })).rejects.toThrow("404");
+  });
+});
+
+describe("GitHub API errors", () => {
+  const respond = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    (() => Promise.resolve(new Response(JSON.stringify(body), { status, headers }))) as typeof fetch;
+
+  it("explains a missing repository in one line", async () => {
+    const err = await fetchReviewComments("o/gone", { fetchImpl: respond(404, { message: "Not Found" }) }).catch((e) => e);
+    expect(err).toBeInstanceOf(GitHubApiError);
+    expect(err.message).toBe("Repository o/gone not found (404). Check the name, or set GITHUB_TOKEN to a token with access if it is private.");
+  });
+
+  it("says the token is invalid on 401", async () => {
+    const err = await fetchReviewComments("o/r", { token: "bogus", fetchImpl: respond(401, { message: "Bad credentials" }) }).catch((e) => e);
+    expect(err.message).toContain("GITHUB_TOKEN");
+    expect(err.message).toContain("401");
+    expect(err.message).not.toContain("Bad credentials");
+  });
+
+  it("reports rate limits with the reset time", async () => {
+    const reset = String(Math.floor(Date.UTC(2026, 9, 19, 21, 30, 0) / 1000));
+    const fetchImpl = respond(403, { message: "API rate limit exceeded for 1.2.3.4" }, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset });
+    const err = await fetchReviewComments("o/r", { fetchImpl }).catch((e) => e);
+    expect(err.message).toContain("rate limit reached (403)");
+    expect(err.message).toContain("resets at 21:30:00 UTC");
+  });
+
+  it("keeps other 403s distinct from rate limits", async () => {
+    const err = await fetchReviewComments("o/r", { fetchImpl: respond(403, { message: "Resource not accessible" }) }).catch((e) => e);
+    expect(err.message).toBe("GitHub denied reading Repository o/r (403): Resource not accessible.");
+  });
+
+  it("does not leak raw JSON for unexpected statuses", async () => {
+    const err = await fetchReviewComments("o/r", { fetchImpl: respond(500, { message: "Server Error", documentation_url: "x" }) }).catch((e) => e);
+    expect(err.message).toBe("GitHub API 500 reading Repository o/r: Server Error");
   });
 });
