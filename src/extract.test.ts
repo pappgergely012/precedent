@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources } from "./extract.js";
+import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources, rankRules } from "./extract.js";
 import type { Rule } from "./rule.js";
 import type { ReviewComment } from "./github.js";
 import type { Llm } from "./llm.js";
@@ -320,5 +320,36 @@ describe("batch concurrency", () => {
     const rules = await extractRules(comments, llm, { batchSize: 1, concurrency: 4 });
     expect(rules).toHaveLength(1);
     expect(rules[0]!.sources).toHaveLength(4);
+  });
+});
+
+describe("rankRules", () => {
+  const withIds = (description: string, ids: number[], reviewers: string[] = ["anna", "bob"], confidence = 0.4): Rule => ({
+    id: description,
+    description,
+    scope: [],
+    confidence,
+    sources: ids.map((id, i) => ({ prNumber: id, reviewer: reviewers[i % reviewers.length]!, commentUrl: `https://github.com/o/r/pull/${id}#discussion_r${id}` })),
+  });
+
+  it("orders by evidence, not by wording", () => {
+    const a = withIds("zzz same evidence", [10, 11]);
+    const b = withIds("aaa same evidence", [20, 21]);
+    // Equal confidence, PRs, reviewers and comment counts: the newer evidence goes first whatever the text.
+    expect(rankRules([a, b]).map((r) => r.id)).toEqual(["aaa same evidence", "zzz same evidence"]);
+    expect(rankRules([b, a]).map((r) => r.id)).toEqual(["aaa same evidence", "zzz same evidence"]);
+  });
+
+  it("puts better supported rules first", () => {
+    const strong = withIds("strong", [1, 2, 3], ["anna", "bob", "cy"], 0.6);
+    const reviewers = withIds("more reviewers", [30, 31], ["anna", "bob"]);
+    const fewer = { ...withIds("one reviewer", [40, 41], ["anna"]), confidence: 0.4 };
+    expect(rankRules([fewer, reviewers, strong]).map((r) => r.id)).toEqual(["strong", "more reviewers", "one reviewer"]);
+  });
+
+  it("is deterministic for identical evidence", () => {
+    const x = withIds("b", [5, 6]);
+    const y = withIds("a", [5, 6]);
+    expect(rankRules([x, y]).map((r) => r.id)).toEqual(rankRules([y, x]).map((r) => r.id));
   });
 });
