@@ -1,6 +1,6 @@
 {
-  "name": "precedent",
-  "version": "0.0.0",
+  "name": "precedent-review",
+  "version": "0.1.0",
   "description": "Learn a team's unwritten code review rules from past pull requests.",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,7 +17,6 @@
     "LICENSE"
   ],
   "license": "Apache-2.0",
-  "private": true,
   "engines": {
     "node": ">=22"
   },
@@ -34,7 +33,9 @@
     "eval:docs:e2e": "tsx scripts/eval-docs-e2e.ts",
     "eval:refresh": "tsx scripts/eval-refresh.ts",
     "check:pack": "node scripts/check-pack.mjs",
-    "snapshots": "tsx scripts/save-snapshots.ts"
+    "snapshots": "tsx scripts/save-snapshots.ts",
+    "smoke:pack": "node scripts/smoke-pack.mjs",
+    "prepublishOnly": "tsc -p tsconfig.build.json && node scripts/check-pack.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
@@ -45,5 +46,23 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "homepage": "https://github.com/pappgergely012/precedent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pappgergely012/precedent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pappgergely012/precedent/issues"
+  },
+  "keywords": [
+    "code-review",
+    "pull-requests",
+    "conventions",
+    "llm",
+    "claude"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
