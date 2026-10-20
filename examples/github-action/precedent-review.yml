@@ -2,14 +2,24 @@
 # .github/workflows/precedent-review.yml (see docs/github-action-recipe.md). The helper script it runs comes from the
 # pinned engine checkout, so there is nothing else to copy and nothing from the pull request is run.
 #
+# Read docs/github-action-recipe.md before using it. In short:
+#  - DO NOT make this check "required": it is fail-open and advisory, and a model service outage must not block merges.
+#  - Set PRECEDENT_ENGINE_REF below to a full commit SHA of the engine that you have read. Until you do, the job ends
+#    green with a note.
+#  - Anyone who can push a branch to this repository can edit this workflow in their branch and read the secret. Use an
+#    API key with a spend limit, and treat write access as access to that key.
+#  - Optional comment: create the repository variable PRECEDENT_POST_COMMENT = true. The job that holds the API key has
+#    a read-only token; a second job with `pull-requests: write` posts the text.
+#
 # Safety choices, each on purpose:
-#  - `pull_request`, never `pull_request_target`: pull requests from forks run with no secrets and a read-only token.
-#  - The job also refuses fork pull requests outright (the `if:` below).
+#  - `pull_request`, never `pull_request_target`: pull requests from forks run with no secrets and a read-only token,
+#    and this workflow also skips them (the `if:` below).
 #  - Nothing from the pull request is checked out or executed: the approved rules come from the BASE commit and the diff
 #    is downloaded as text through the API. A pull request cannot change the rules that review it.
 #  - The API key is only visible to the one step that calls the model.
-#  - Fail-open and capped: the review never blocks a merge, and a pull request whose estimate is over MAX_CALLS is
-#    skipped with a note instead of running up a bill. One run per pull request at a time.
+#  - Fail-open and capped: every step may fail without failing the job, and a pull request whose estimate is over
+#    MAX_CALLS is skipped with a note. The spend per push is bounded by MAX_CALLS; the spend per pull request by
+#    MAX_CALLS times the number of pushes (one run per pull request at a time).
 name: Precedent review
 
 on:
@@ -22,10 +32,8 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write # only used to post the optional comment; remove it (and the comment step) if you only want the job summary
 
 env:
-  POST_COMMENT: "false" # set to "true" to also post (and later update) one pull request comment
   MAX_CALLS: "20" # skip the review when the estimate is above this many model calls
   MAX_FILES: "30" # review at most this many files (the ones with the most added lines)
   PRECEDENT_ENGINE_REF: "REPLACE_WITH_A_FULL_COMMIT_SHA" # pin the engine to a commit you have read
@@ -35,45 +43,72 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
     steps:
+      - name: Check the configuration
+        id: config
+        run: |
+          if [ "${PRECEDENT_ENGINE_REF}" = "REPLACE_WITH_A_FULL_COMMIT_SHA" ] || ! printf '%s' "${PRECEDENT_ENGINE_REF}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf '### Precedent review\n\nNot reviewed: set PRECEDENT_ENGINE_REF in the workflow to a full commit SHA of the engine. This never blocks the merge.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out the base commit (your approved rules; no pull request code)
-        uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+        continue-on-error: true
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
       - name: Check out the Precedent engine at a pinned commit
-        uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+        continue-on-error: true
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: pappgergely012/precedent
           ref: ${{ env.PRECEDENT_ENGINE_REF }}
           path: .precedent-engine
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        if: steps.config.outputs.ready == 'true'
+        continue-on-error: true
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
       - name: Build the engine
+        if: steps.config.outputs.ready == 'true'
+        continue-on-error: true
         working-directory: .precedent-engine
         run: |
-          npm install --global pnpm@10
-          pnpm install --frozen-lockfile
+          npm install --global --ignore-scripts pnpm@10.28.0
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm build
 
       - name: Download the pull request diff (text only)
+        if: steps.config.outputs.ready == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.url }}
         run: |
+          # The API refuses very large diffs; the review step then reports "diff was not downloaded" and the job stays green.
           curl --fail --silent --show-error --location \
             --header "Authorization: Bearer ${GH_TOKEN}" \
             --header "Accept: application/vnd.github.v3.diff" \
             --output pr.diff "${PR_URL}"
 
       - name: Review against the approved rules
+        if: steps.config.outputs.ready == 'true'
+        continue-on-error: true
         env:
-          # The only step that sees the key. Not passed to pull requests from forks (and this job skips them anyway).
+          # The only step that sees the key. Not passed to pull requests from forks or to Dependabot (the job skips with a note).
           PRECEDENT_ANTHROPIC_API_KEY: ${{ secrets.PRECEDENT_ANTHROPIC_API_KEY }}
           PRECEDENT_CLI: .precedent-engine/dist/cli.js
           RULES_FILE: .precedent/approved.json
@@ -81,8 +116,36 @@ jobs:
           COMMENT_FILE: precedent-comment.md
         run: node .precedent-engine/examples/github-action/scripts/review-pr.mjs
 
+      - name: Keep the comment text for the posting job
+        if: steps.config.outputs.ready == 'true' && vars.PRECEDENT_POST_COMMENT == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: precedent-comment
+          path: precedent-comment.md
+          if-no-files-found: ignore
+          retention-days: 1
+
+  comment:
+    needs: review
+    if: always() && vars.PRECEDENT_POST_COMMENT == 'true' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    # The only job with a write token. It holds no API key and runs no pull request or engine code.
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Get the comment text
+        id: text
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: precedent-comment
+
       - name: Post or update one pull request comment
-        if: env.POST_COMMENT == 'true'
+        if: steps.text.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -90,7 +153,7 @@ jobs:
         run: |
           test -s precedent-comment.md || exit 0
           id=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq '[.[] | select(.user.type == "Bot" and (.body | startswith("<!-- precedent-review -->")))][0].id // empty')
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- precedent-review -->"))) | .id' | head -n 1)
           if [ -n "${id}" ]; then
             gh api --method PATCH "repos/${REPO}/issues/comments/${id}" --field body=@precedent-comment.md
           else

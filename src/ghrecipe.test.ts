@@ -18,7 +18,20 @@ describe("recipe script: sanitize, estimate and decision", () => {
     expect(out).not.toMatch(new RegExp(`${ESC}|<img|!\\[|javascript:|‮`));
     expect(out).toContain("`@everyone`");
     expect(out).toContain("`@org/team`");
-    expect(out).toContain("&lt;img");
+    expect(out).not.toContain("<");
+  });
+  it("removes links that came from a file name or rule text, but keeps the evidence links the engine builds for this repository", () => {
+    const text = [
+      "1. `docs/[click here](https://evil.example/x).md:3`",
+      "Reviewers asked for this before in [#12](https://github.com/o/r/pull/12#discussion_r34), [#13](https://github.com/other/repo/pull/13#discussion_r35) and [#14](https://evil.example/pull/14#discussion_r1).",
+      "See [ref][1] and www.evil.example and https://evil.example/y and <https://evil.example/z>",
+      "[1]: https://evil.example/ref",
+    ].join("\n");
+    const out = recipe.sanitize(text, 60_000, "o/r");
+    expect(out).toContain("docs/click here.md:3");
+    expect(out).toContain("[#12](https://github.com/o/r/pull/12#discussion_r34)");
+    expect(out).not.toMatch(/evil\.example|other\/repo/);
+    expect(out.match(/\]\(/g)).toHaveLength(1); // only the evidence link of this repository
   });
   it("cuts very long output", () => {
     expect(recipe.sanitize("x".repeat(70_000)).length).toBeLessThan(60_100);
@@ -93,41 +106,81 @@ console.log("\\n1. src/\\u001b[31ma.ts:3\\nUse gate() here. @everyone\\n\\n**Tea
 });
 
 describe("workflow file: safety properties", () => {
-  const stepBlock = (name: string) => {
-    const start = workflow.indexOf(`- name: ${name}`);
+  const stepBlocks = workflow.split(/\n      - (?=name:)/).slice(1);
+  const jobBlock = (name: string) => {
+    const start = workflow.indexOf(`\n  ${name}:\n`);
     expect(start).toBeGreaterThan(-1);
-    const next = workflow.indexOf("\n      - ", start + 5);
-    return workflow.slice(start, next === -1 ? undefined : next);
+    const rest = workflow.slice(start + 1);
+    const next = rest.search(/\n  [a-z]+:\n/);
+    return next === -1 ? rest : rest.slice(0, next);
   };
   it("uses pull_request, never pull_request_target, and skips fork pull requests and drafts", () => {
     expect(workflow).toMatch(/^on:\n  pull_request:/m);
     expect(workflow).not.toContain("pull_request_target");
-    expect(workflow).toContain("github.event.pull_request.head.repo.full_name == github.repository");
+    expect(jobBlock("review")).toContain("github.event.pull_request.head.repo.full_name == github.repository");
+    expect(jobBlock("comment")).toContain("github.event.pull_request.head.repo.full_name == github.repository");
   });
-  it("gives the token only what it needs and bounds the job", () => {
-    expect(workflow).toMatch(/permissions:\n  contents: read\n  pull-requests: write/);
+  it("is read-only by default; only the comment job, which holds no key, has a write token", () => {
+    expect(workflow).toMatch(/\npermissions:\n  contents: read\n/);
+    expect(workflow.match(/pull-requests: write/g)).toHaveLength(1);
+    expect(jobBlock("comment")).toContain("pull-requests: write");
+    expect(jobBlock("comment")).not.toContain("secrets.");
+    expect(jobBlock("review")).not.toMatch(/write/);
     expect(workflow).not.toMatch(/write-all|id-token|actions: write|contents: write/);
-    expect(workflow).toContain("timeout-minutes:");
+  });
+  it("bounds the jobs", () => {
+    expect(workflow.match(/timeout-minutes:/g)).toHaveLength(2);
     expect(workflow).toContain("cancel-in-progress: true");
+  });
+  it("is fail-open: both jobs and every step after the configuration check may fail without failing the run", () => {
+    expect(jobBlock("review")).toMatch(/\n    continue-on-error: true/);
+    expect(jobBlock("comment")).toMatch(/\n    continue-on-error: true/);
+    const others = stepBlocks.filter((b) => !b.startsWith("name: Check the configuration"));
+    expect(others.length).toBeGreaterThanOrEqual(8);
+    for (const block of others) expect(block, block.split("\n")[0]).toContain("continue-on-error: true");
+  });
+  it("ends green with a note while the engine pin is still the placeholder", () => {
+    const config = stepBlocks.find((b) => b.startsWith("name: Check the configuration"))!;
+    expect(config).toContain("REPLACE_WITH_A_FULL_COMMIT_SHA");
+    expect(config).toContain("Not reviewed: set PRECEDENT_ENGINE_REF");
+    expect(config).not.toMatch(/exit 1/);
+    for (const block of stepBlocks.filter((b) => !b.startsWith("name: Check the configuration") && !b.startsWith("name: Get the comment text") && !b.startsWith("name: Post or update"))) {
+      expect(block, block.split("\n")[0]).toContain("steps.config.outputs.ready == 'true'");
+    }
   });
   it("shows the API key to exactly one step, the one that calls the model", () => {
     expect(workflow.match(/secrets\./g)).toHaveLength(1);
-    expect(stepBlock("Review against the approved rules")).toContain("secrets.PRECEDENT_ANTHROPIC_API_KEY");
+    expect(stepBlocks.find((b) => b.startsWith("name: Review against"))).toContain("secrets.PRECEDENT_ANTHROPIC_API_KEY");
   });
   it("checks out the base commit for rules and never the pull request head; checkouts keep no credentials", () => {
     expect(workflow).toContain("ref: ${{ github.event.pull_request.base.sha }}");
     expect(workflow).not.toMatch(/pull_request\.head\.(sha|ref)|github\.head_ref|github\.sha/);
-    const checkouts = workflow.split("uses: actions/checkout@v4").length - 1;
-    expect(checkouts).toBe(2);
+    expect(workflow.match(/uses: actions\/checkout@/g)).toHaveLength(2);
     expect(workflow.match(/persist-credentials: false/g)).toHaveLength(2);
   });
   it("does not put attacker-controlled text into a shell script", () => {
     expect(workflow).not.toMatch(/\$\{\{\s*github\.event\.(pull_request\.(title|body|head)|comment|review|issue)/);
     expect(workflow).not.toMatch(/github\.event\.pull_request\.head\.(ref|label|sha|user)/);
   });
-  it("only uses first-party actions plus the pinned engine checkout", () => {
+  it("uses only first-party actions, each pinned to a full commit SHA, and pins and hardens the package manager", () => {
     const uses = [...workflow.matchAll(/uses:\s*(\S+)/g)].map((m) => m[1]!);
-    expect(uses.every((u) => /^actions\/(checkout|setup-node)@v\d+$/.test(u))).toBe(true);
+    expect(uses.length).toBeGreaterThanOrEqual(5);
+    expect(uses.every((u) => /^actions\/(checkout|setup-node|upload-artifact|download-artifact)@[0-9a-f]{40}$/.test(u))).toBe(true);
     expect(workflow).toContain("repository: pappgergely012/precedent");
+    expect(workflow).toMatch(/pnpm@\d+\.\d+\.\d+/);
+    expect(workflow).toContain("--ignore-scripts");
+  });
+  it("finds its own earlier comment by the bot login and marker, not by a lookalike", () => {
+    expect(workflow).toContain('.user.login == "github-actions[bot]"');
+    expect(workflow).toContain("<!-- precedent-review -->");
+  });
+});
+
+describe("file names in the review output", () => {
+  it("codeSpan keeps a file name from ending its code span, becoming a link or adding lines", async () => {
+    const { codeSpan } = await import("./terminal.js");
+    const out = codeSpan("docs/[click here](https://evil.example/x)`\n+ forged.md:3");
+    expect(out.startsWith("`") && out.endsWith("`")).toBe(true);
+    expect(out.slice(1, -1)).not.toMatch(/[`\[\]()<>\n]/);
   });
 });

@@ -556,7 +556,8 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   if (cache) log(`${usable.length - pending.length} of ${usable.length} comments answered from the cache`);
 
   const batchList = Array.from({ length: Math.ceil(pending.length / batchSize) }, (_, i) => pending.slice(i * batchSize, (i + 1) * batchSize));
-  log(`Analysing ${pending.length} of ${comments.length} comments in ${batchList.length} batches${votes > 1 ? `, each asked ${votes} times` : ""}`);
+  if (cache && pending.length === 0) log(`Reusing the cached analysis of ${usable.length} comments (0 new, no extraction calls)`);
+  else log(`Analysing ${pending.length} of ${comments.length} comments in ${batchList.length} batches${votes > 1 ? `, each asked ${votes} times` : ""}`);
   let done = 0;
   // Saves are written one at a time, after every finished batch: a run that dies keeps the batches it already paid for.
   let writing: Promise<void> = Promise.resolve();

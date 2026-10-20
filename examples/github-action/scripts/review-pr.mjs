@@ -11,19 +11,40 @@ const MAX_SUMMARY_CHARS = 60_000; // a PR comment holds 65,536
 const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, "g");
 
+const PRIVATE_OPEN = String.fromCharCode(0xe000);
+const PRIVATE_CLOSE = String.fromCharCode(0xe001);
+
+/**
+ * The only links allowed through: the evidence links the engine builds itself, `[#12](https://github.com/OWNER/REPO/pull/12#discussion_r34)`,
+ * and only for this repository when GITHUB_REPOSITORY is set. Everything else that looks like a link is removed.
+ */
+function evidenceLink(repo) {
+  const where = repo ? repo.split("/").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("/") : "[\\w.-]+/[\\w.-]+";
+  return new RegExp(`\\[#(\\d+)\\]\\((https://github\\.com/${where}/pull/\\d+#discussion_r\\d+)\\)`, "g");
+}
+
 /** Text from the CLI (which includes file paths chosen by the PR author) made safe to put in a job summary or comment. */
-export function sanitize(text, max = MAX_SUMMARY_CHARS) {
+export function sanitize(text, max = MAX_SUMMARY_CHARS, repo = process.env.GITHUB_REPOSITORY) {
   let out = "";
   for (const ch of text.replace(ANSI, "")) {
     const c = ch.codePointAt(0);
-    const bad = (c < 32 && c !== 10) || (c >= 127 && c <= 159) || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0x2028 || c === 0x2029 || c === 0xfeff;
+    const bad = (c < 32 && c !== 10) || (c >= 127 && c <= 159) || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0x2028 || c === 0x2029 || c === 0xfeff || c === 0xe000 || c === 0xe001;
     out += bad ? " " : ch;
   }
+  const kept = [];
+  out = out.replace(evidenceLink(repo), (m) => `${PRIVATE_OPEN}${kept.push(m) - 1}${PRIVATE_CLOSE}`);
   out = out
+    .replace(/<img\b[^>]*>/gi, " ")
+    .replace(/<([a-z][^>]*)>/gi, "&lt;$1>")
     .replace(/</g, "&lt;")
     .replace(/!\[/g, "[")
-    .replace(/(^|[^\w`])@(?=[A-Za-z0-9_])([A-Za-z0-9_/-]+)/g, (_m, before, name) => `${before}\`@${name}\``)
-    .replace(/\b(?:javascript|vbscript|data|file):[^\s)>\]]*/gi, "[link removed]");
+    .replace(/\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)/g, "$1") // any other markdown link keeps its label only
+    .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1") // reference-style links
+    .replace(/^\s{0,3}\[[^\]]+\]:\s*\S+.*$/gm, "") // link reference definitions
+    .replace(/\b(?:https?|ftp|javascript|vbscript|data|file):[^\s)>\]]*/gi, "[link removed]")
+    .replace(/\bwww\.[^\s)>\]]+/gi, "[link removed]")
+    .replace(/(^|[^\w`])@(?=[A-Za-z0-9_])([A-Za-z0-9_/-]+)/g, (_m, before, name) => `${before}\`@${name}\``);
+  out = out.replace(new RegExp(`${PRIVATE_OPEN}(\\d+)${PRIVATE_CLOSE}`, "g"), (_m, i) => kept[Number(i)]);
   return out.length > max ? `${out.slice(0, max)}\n\n... (output cut)` : out;
 }
 

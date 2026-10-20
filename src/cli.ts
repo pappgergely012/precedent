@@ -19,7 +19,7 @@ import { helpFor } from "./help.js";
 import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, samePath, writeRulesFile } from "./rulesfile.js";
-import { safeLine } from "./terminal.js";
+import { codeSpan, safeLine } from "./terminal.js";
 import { describeError } from "./errors.js";
 import { ruleTier } from "./rule.js";
 import { diffRules, renderRuleDiff } from "./rulediff.js";
@@ -437,7 +437,7 @@ async function main(): Promise<void> {
     if (comments.length === 0) {
       console.log("No rule violations found.");
     }
-    comments.forEach((c, i) => console.log(`\n${i + 1}. ${c.path}:${c.line}\n${c.body}`));
+    comments.forEach((c, i) => console.log(`\n${i + 1}. ${codeSpan(`${c.path}:${c.line}`)}\n${c.body}`));
 
     if (values.post && comments.length > 0) {
       const url = await postPullReview(
