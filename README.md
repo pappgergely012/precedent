@@ -149,6 +149,8 @@ jobs:
           add-paths: .precedent/rules.json
 ```
 
+A ready-to-copy workflow for teams that already approved rules (job summary or one pull request comment, cost cap, fail-open, fork-safe) is in `examples/github-action/` with notes in `docs/github-action-recipe.md`. It has not been security-reviewed yet.
+
 ## Planned
 
 - Export of the rules to lint configs.

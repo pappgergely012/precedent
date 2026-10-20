@@ -1,0 +1,98 @@
+# Review pull requests against your team's APPROVED rules with Precedent. Copy this one file to
+# .github/workflows/precedent-review.yml (see docs/github-action-recipe.md). The helper script it runs comes from the
+# pinned engine checkout, so there is nothing else to copy and nothing from the pull request is run.
+#
+# Safety choices, each on purpose:
+#  - `pull_request`, never `pull_request_target`: pull requests from forks run with no secrets and a read-only token.
+#  - The job also refuses fork pull requests outright (the `if:` below).
+#  - Nothing from the pull request is checked out or executed: the approved rules come from the BASE commit and the diff
+#    is downloaded as text through the API. A pull request cannot change the rules that review it.
+#  - The API key is only visible to the one step that calls the model.
+#  - Fail-open and capped: the review never blocks a merge, and a pull request whose estimate is over MAX_CALLS is
+#    skipped with a note instead of running up a bill. One run per pull request at a time.
+name: Precedent review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: precedent-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write # only used to post the optional comment; remove it (and the comment step) if you only want the job summary
+
+env:
+  POST_COMMENT: "false" # set to "true" to also post (and later update) one pull request comment
+  MAX_CALLS: "20" # skip the review when the estimate is above this many model calls
+  MAX_FILES: "30" # review at most this many files (the ones with the most added lines)
+  PRECEDENT_ENGINE_REF: "REPLACE_WITH_A_FULL_COMMIT_SHA" # pin the engine to a commit you have read
+
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the base commit (your approved rules; no pull request code)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Check out the Precedent engine at a pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: pappgergely012/precedent
+          ref: ${{ env.PRECEDENT_ENGINE_REF }}
+          path: .precedent-engine
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the engine
+        working-directory: .precedent-engine
+        run: |
+          npm install --global pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Download the pull request diff (text only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.url }}
+        run: |
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github.v3.diff" \
+            --output pr.diff "${PR_URL}"
+
+      - name: Review against the approved rules
+        env:
+          # The only step that sees the key. Not passed to pull requests from forks (and this job skips them anyway).
+          PRECEDENT_ANTHROPIC_API_KEY: ${{ secrets.PRECEDENT_ANTHROPIC_API_KEY }}
+          PRECEDENT_CLI: .precedent-engine/dist/cli.js
+          RULES_FILE: .precedent/approved.json
+          DIFF_FILE: pr.diff
+          COMMENT_FILE: precedent-comment.md
+        run: node .precedent-engine/examples/github-action/scripts/review-pr.mjs
+
+      - name: Post or update one pull request comment
+        if: env.POST_COMMENT == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          test -s precedent-comment.md || exit 0
+          id=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '[.[] | select(.user.type == "Bot" and (.body | startswith("<!-- precedent-review -->")))][0].id // empty')
+          if [ -n "${id}" ]; then
+            gh api --method PATCH "repos/${REPO}/issues/comments/${id}" --field body=@precedent-comment.md
+          else
+            gh api --method POST "repos/${REPO}/issues/${PR_NUMBER}/comments" --field body=@precedent-comment.md
+          fi
