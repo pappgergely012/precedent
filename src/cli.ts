@@ -65,6 +65,7 @@ const OPTIONS = {
   verify: { type: "boolean" },
   cache: { type: "string" },
   "no-cache": { type: "boolean" },
+  "reuse-extractions": { type: "string" },
   top: { type: "string" },
   "pin-extraction": { type: "boolean" },
   docs: { type: "boolean" },
@@ -157,6 +158,7 @@ const progress = (message: string) => console.log(`[${new Date().toISOString().s
 async function main(): Promise<void> {
   if (command === "mine" && repo) {
     if (values.cache && values["no-cache"]) fail("--cache and --no-cache cannot be used together.");
+    if (values["reuse-extractions"] && (values.cache || values["no-cache"])) fail("--reuse-extractions cannot be combined with --cache or --no-cache.");
     if (!values["dry-run"]) requireAnthropicKey();
     if (!process.env.GITHUB_TOKEN) {
       console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour and mining a large repository will hit the limit.");
@@ -174,7 +176,8 @@ async function main(): Promise<void> {
     mask.report();
     if (values["dry-run"]) {
       const usable = selectUsable(comments, { maxComments: intFlag("max-comments", 1000), maxAgeDays: intFlag("max-age-days", 730) });
-      const cache = values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
+      const cacheFile = values.cache ?? values["reuse-extractions"];
+      const cache = cacheFile ? await fileCache(cacheFile, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
       const votes = intFlag("extraction-votes", 1);
       const pending = cache ? usable.filter((c) => cache.get(c.id, cacheText(c, votes)) === undefined).length : usable.length;
       for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending, votes }), usable.length, votes)) console.log(line);
@@ -186,7 +189,9 @@ async function main(): Promise<void> {
     const model = process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
     // With --cache, every model answer (extraction, merge, audit, dedupe, --docs) is kept next to the principle cache.
     const llm = cachePath ? cachedLlm(anthropicLlm(), await fileStore(`${cachePath}.responses.json`), model) : anthropicLlm();
-    const mineCache = cachePath ? await fileCache(cachePath, model) : undefined;
+    // --reuse-extractions: only the per-comment judgements come from the file; merge, audit and dedupe always call the model.
+    const reusePath = values["reuse-extractions"];
+    const mineCache = cachePath || reusePath ? await fileCache((cachePath ?? reusePath)!, model) : undefined;
     let rules = await extractRules(sendable, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
@@ -223,11 +228,11 @@ async function main(): Promise<void> {
       console.log(`\nWritten in the guide but not seen in review comments (${documentedOnly.length}):`);
       for (const d of documentedOnly.slice(0, 5)) console.log(`   - ${d.description} (${d.path})`);
     }
-    const principleCache = cachePath ? mineCache : undefined;
+    const principleCache = mineCache;
     const stageStats = "cacheStats" in llm ? (llm as ReturnType<typeof cachedLlm>).cacheStats() : undefined;
     if ("cacheStats" in llm) await (llm as ReturnType<typeof cachedLlm>).save();
     // Stability and gate runs must be fresh: this line lets a harness void a run that was answered from a cache.
-    console.log(`\nCache hits: ${(principleCache?.hits() ?? 0) + (stageStats?.hits ?? 0)}${stageStats ? ` (${describeCache(stageStats)})` : " (no cache in use)"}`);
+    console.log(`\nCache hits: ${(principleCache?.hits() ?? 0) + (stageStats?.hits ?? 0)}${stageStats ? ` (${describeCache(stageStats)})` : reusePath ? " (per-comment extractions only; merge, audit and dedupe ran live)" : " (no cache in use)"}`);
     const usage = llm.usage?.();
     if (usage) {
       console.log(`Model usage: ${usage.calls} calls, ${usage.inputTokens.toLocaleString("en-US")} input and ${usage.outputTokens.toLocaleString("en-US")} output tokens (excluding --verify).`);
