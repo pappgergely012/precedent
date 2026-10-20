@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDiff } from "./diff.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
-import { formatComment, matchesGlob, reviewDiff, rulesForFile, sanitizeCommentText } from "./review.js";
+import { formatComment, matchesGlob, reviewDiff, rulesForFile, sanitizeCommentText, chooseFiles, estimateReview } from "./review.js";
 
 const diff = `diff --git a/src/api.ts b/src/api.ts
 index 111..222 100644
@@ -163,5 +163,27 @@ describe("parseDiff paths", () => {
   it("keeps ordinary paths, renames and deleted files working", () => {
     expect(one("+++ b/src/a.ts")[0]!.path).toBe("src/a.ts");
     expect(one("+++ /dev/null")).toEqual([]);
+  });
+});
+
+describe("chooseFiles and estimateReview", () => {
+  const file = (path: string, added: number[], patch = "x".repeat(700)) => ({ path, patch, addedLines: new Set(added) });
+  const many = [file("b.ts", [1]), file("a.ts", [1]), file("big.ts", [1, 2, 3, 4]), file("c.ts", [1, 2]), file("d.ts", [1, 2])];
+
+  it("keeps everything under the cap, and otherwise the files with most added lines, ties by path, in diff order", () => {
+    expect(chooseFiles(many, 5)).toBe(many);
+    expect(chooseFiles(many, 3).map((f) => f.path)).toEqual(["big.ts", "c.ts", "d.ts"]);
+    expect(chooseFiles(many, 2).map((f) => f.path)).toEqual(["big.ts", "c.ts"]);
+    expect(chooseFiles(many, 1).map((f) => f.path)).toEqual(["big.ts"]);
+    expect(chooseFiles([...many].reverse(), 4).map((f) => f.path).sort()).toEqual(chooseFiles(many, 4).map((f) => f.path).sort());
+  });
+
+  it("estimates input and output tokens from text length and the number of calls", () => {
+    const rule = { id: "r1", description: "Use gate() in tests.", scope: [], confidence: 0.5, sources: [{ prNumber: 1, reviewer: "a", commentUrl: "https://github.com/o/r/pull/1#discussion_r1" }] };
+    const e = estimateReview(many.slice(0, 2), [rule]);
+    expect(e.calls).toBe(2);
+    expect(e.outputTokens).toBe(240);
+    expect(e.inputTokens).toBe(2 * (Math.round((700 + 28) / 3.5) + 350));
+    expect(estimateReview([], [rule])).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0 });
   });
 });

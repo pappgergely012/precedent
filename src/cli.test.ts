@@ -118,6 +118,18 @@ describe("cli help, version and early validation", () => {
   });
 });
 
+describe("cli review with a missing diff file", () => {
+  it("says so in one line instead of printing ENOENT", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const rules = join(dir, "rules.json");
+    writeFileSync(rules, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-19T00:00:00.000Z", rules: [] }));
+    const r = run(["review", "--diff", "/nonexistent/pr.diff", "--rules", rules]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("Diff file /nonexistent/pr.diff not found.");
+    expect(r.stderr).not.toContain("ENOENT");
+  });
+});
+
 describe("cli review --dry-run", () => {
   it("estimates the calls for a local diff without an API key or a model call, and honours --max-files", () => {
     const dir = mkdtempSync(join(tmpdir(), "precedent-"));
@@ -131,6 +143,7 @@ describe("cli review --dry-run", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("Reviewing 3 changed files");
     expect(r.stdout).toContain("2 of 3 files have an applicable rule; 2 model calls");
+    expect(r.stdout).toMatch(/\d+ input and \d+ output tokens/);
     expect(r.stdout).toContain("No model call was made.");
     const capped = run(["review", "--diff", diff, "--rules", rules, "--dry-run", "--max-files", "1"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
     expect(capped.stdout).toContain("1 model calls (cap --max-files 1)");

@@ -41,7 +41,14 @@ describe("fitTier (the survey's proxy)", () => {
     expect(lines).toContain("Core rules are possible");
     expect(lines).toContain('For "likely": 150 comments, needs 300');
     expect(lines).toContain("8 of 11 repositories");
+    expect(lines).toContain('"possible" often means few or none');
     expect(describeFit("o/r", fitMetrics([]), "x").join("\n")).toContain("No inline review comments");
+  });
+  it("marks a count at the cap as 1,000+", () => {
+    const capped = describeFit("o/r", fitMetrics(spread(1000, 30, 200)), "x").join("\n");
+    expect(capped).toContain("o/r: 1,000+ inline review comments");
+    expect(capped).toContain("at least that many");
+    expect(describeFit("o/r", fitMetrics(spread(999, 30, 200)), "x").join("\n")).toContain("o/r: 999 inline review comments");
   });
 });
 

@@ -68,6 +68,34 @@ export function matchesGlob(glob: string, path: string): boolean {
   return expandBraces(clean(glob)).some((g) => globToRegExp(g).test(target));
 }
 
+/**
+ * The files to review when there are more than `maxFiles`: the ones with the most added lines (they carry the most
+ * code that can break a rule), ties broken by path, then put back in diff order. Deterministic for a given diff.
+ */
+export function chooseFiles(files: FileDiff[], maxFiles: number): FileDiff[] {
+  if (files.length <= maxFiles) return files;
+  const keep = new Set(
+    [...files]
+      .sort((a, b) => b.addedLines.size - a.addedLines.size || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      .slice(0, maxFiles),
+  );
+  return files.filter((f) => keep.has(f));
+}
+
+/**
+ * A rough cost estimate for reviewing `files` (one call per file): about 3.5 characters per token for the patch (cut
+ * at 12,000 characters) and the applicable rules, 350 tokens of instructions, and about 120 output tokens per call
+ * (an assumption: a short list of findings). Not measured against model usage.
+ */
+export function estimateReview(files: FileDiff[], rules: Rule[], maxPatchLength = 12000): { calls: number; inputTokens: number; outputTokens: number } {
+  let inputTokens = 0;
+  for (const f of files) {
+    const ruleChars = rulesForFile(rules, f.path).reduce((n, r) => n + r.description.length + 8, 0);
+    inputTokens += Math.round((Math.min(f.patch.length, maxPatchLength) + ruleChars) / 3.5) + 350;
+  }
+  return { calls: files.length, inputTokens, outputTokens: files.length * 120 };
+}
+
 export function rulesForFile(rules: Rule[], path: string): Rule[] {
   return rules.filter((r) => r.scope.length === 0 || r.scope.some((g) => matchesGlob(g, path)));
 }

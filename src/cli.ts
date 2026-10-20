@@ -6,7 +6,7 @@ import { cacheText, extractRules, isSingleReviewer, selectUsable } from "./extra
 import { fetchPullDiff, fetchReviewComments, GitHubApiError, postPullReview } from "./github.js";
 import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
-import { formatComment, reviewDiff, rulesForFile } from "./review.js";
+import { chooseFiles, estimateReview, formatComment, reviewDiff, rulesForFile } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { describeFit, fitMetrics } from "./fit.js";
 import { loadOrFetchComments } from "./snapshot.js";
@@ -330,7 +330,9 @@ async function main(): Promise<void> {
     const { rules } = await readRulesFile(reviewRulesPath).catch((error: NodeJS.ErrnoException) =>
       fail(error.code === "ENOENT" ? `Rules file ${reviewRulesPath} not found. Run "precedent mine owner/repo --out ${reviewRulesPath}" first.` : `Cannot read ${reviewRulesPath}: ${error.message.split("\n")[0]}`),
     );
-    const diffText = values.diff ? await readFile(values.diff, "utf8") : await fetchPullDiff(repo!, prNumber, { token });
+    const diffText = values.diff
+      ? await readFile(values.diff, "utf8").catch((error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Diff file ${values.diff} not found.` : `Cannot read ${values.diff}: ${error.message.split("\n")[0]}`))
+      : await fetchPullDiff(repo!, prNumber, { token });
     const diffMask = redactor();
     const files = parseDiff(diffText).map((f) => ({ ...f, patch: diffMask.text(f.patch) }));
     diffMask.report();
@@ -340,16 +342,17 @@ async function main(): Promise<void> {
     // One model call per file that some rule applies to; a very large PR is capped so it cannot run up an unbounded bill.
     const maxFiles = intFlag("max-files", 100);
     const reviewable = files.filter((f) => rulesForFile(rules, f.path).length > 0);
+    const chosen = chooseFiles(reviewable, maxFiles);
     if (values["dry-run"]) {
-      const tokens = reviewable.reduce((sum, f) => sum + Math.round((Math.min(f.patch.length, 12_000) + rulesForFile(rules, f.path).reduce((n, r) => n + r.description.length + 8, 0)) / 3.5) + 350, 0);
-      const calls = Math.min(reviewable.length, maxFiles);
-      console.log(`Dry run: ${reviewable.length} of ${files.length} files have an applicable rule; ${calls} model calls (cap --max-files ${maxFiles}), roughly ${Math.round((tokens * calls) / Math.max(1, reviewable.length)).toLocaleString("en-US")} input tokens (a rough estimate from text length). No model call was made.`);
+      const e = estimateReview(chosen, rules);
+      console.log(`Dry run: ${reviewable.length} of ${files.length} files have an applicable rule; ${e.calls} model calls (cap --max-files ${maxFiles}), roughly ${e.inputTokens.toLocaleString("en-US")} input and ${e.outputTokens.toLocaleString("en-US")} output tokens (a rough estimate from text length). No model call was made.`);
       return;
     }
-    const capped = reviewable.length > maxFiles ? new Set(reviewable.slice(0, maxFiles)) : undefined;
-    if (capped) console.log(`Notice: ${reviewable.length} files have an applicable rule; only the first ${maxFiles} are reviewed (raise --max-files to review more).`);
+    if (chosen.length < reviewable.length) {
+      console.log(`Notice: ${reviewable.length} files have an applicable rule; only the ${maxFiles} with the most added lines are reviewed (ties by path; raise --max-files to review more).`);
+    }
 
-    const violations = await reviewDiff(capped ? files.filter((f) => capped.has(f)) : files, rules, anthropicLlm(), { onProgress: progress });
+    const violations = await reviewDiff(chosen, rules, anthropicLlm(), { onProgress: progress });
     const byId = new Map(rules.map((r) => [r.id, r]));
     const comments = violations.map((v) => ({ path: v.path, line: v.line, body: formatComment(v, byId.get(v.ruleId)!) }));
 
