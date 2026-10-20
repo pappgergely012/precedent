@@ -24,6 +24,27 @@ You get a ranked list of rules. Each rule has a one-sentence statement and links
 - Rule quality is still being measured. Read the citations before trusting a rule.
 - Rules are only as good as your review history: a repository whose review comments are mostly one-off remarks yields few or no recurring rules.
 
+## Install
+
+Precedent is not published to npm yet. From a clone (Node 22+, pnpm):
+
+```bash
+pnpm install && pnpm build
+node dist/cli.js mine owner/repo          # the commands below call this `precedent`
+npm pack                                  # makes precedent-0.0.0.tgz (only dist, README and LICENSE)
+npm install ./precedent-0.0.0.tgz         # in another project: `npx precedent --help`
+```
+
+`precedent --help` prints the usage and `precedent --version` the version.
+
+## Does it fit your repository?
+
+```bash
+precedent check owner/repo
+```
+
+A few seconds, no model and no API key: it counts the inline review comments of the last 12 months (at most 1,000), the reviewers, how many reviewers wrote 3 or more, how much of the review one person does, and prints whether core rules are `likely`, `possible` or `unlikely`, with what is missing. It uses the thresholds of our public-repository survey (about 300 comments and 8 active reviewers for "likely"). It is a heuristic on counts only: on the 11 repositories we mined, it agreed with the number of core rules actually found on 8, and it is lenient (`possible` often means few or none). Only inline review comments count; teams that review in the pull request conversation, and private repositories you have not pointed it at, are not seen. On rails/rails, ripgrep and prettier it printed `likely`, `unlikely` and `possible`, matching the survey.
+
 ## Usage
 
 ```bash
@@ -43,8 +64,9 @@ precedent review --diff pr.diff
 
 Needs `GITHUB_TOKEN` and `PRECEDENT_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`). Uses `claude-haiku-5-5` by default (override with `PRECEDENT_MODEL`).
 
+- `review` makes one model call per changed file that some rule applies to. `--dry-run` shows that count and a rough token estimate without a model call or an API key; `--max-files N` (default 100) caps the files reviewed: the files with the most added lines are kept (ties by path) and a notice is printed when the cap applies; the dry run shows input and output token estimates (output is an assumed 120 tokens per call). Scope globs support `{a,b}` alternatives and ignore a leading `./`. Everything posted to a pull request is built from sanitised text: the model's sentence and the rule text lose links, images, HTML, control and bidirectional characters and are length-capped, `@mentions` are put in code spans so nobody is notified, and the "reviewers asked for this before" links are built from the stored citation URLs after a strict check. `--post` is still required to post anything.
 - `mine` works like this:
-  - It reads up to `--max-pages` pages of review comments (default 30; paging stops early once enough top-level comments are collected). Replies, very short comments, comments written by the pull request's own author and repeated identical text from one reviewer on one pull request are ignored.
+  - It reads up to `--max-pages` pages of review comments (default 30; paging stops early once enough top-level comments are collected). `--max-pages` is a soft target: after that many pages the fetch keeps going (up to 30 pages in total) until it has collected 300 top-level comments, so `--max-pages 1` on a repository with many threaded replies can still read several hundred comments. Replies, very short comments, comments written by the pull request's own author and repeated identical text from one reviewer on one pull request are ignored.
   - It analyses the newest `--max-comments` (default 1000), preferring comments from the last `--max-age-days` (default 730). If that would leave fewer than 300 usable comments, the newest 300 are kept whatever their age, so quiet repositories keep their history.
   - A rule needs at least `--min-occurrences` comments (default 2) from at least 2 distinct pull requests. An audit pass then drops the comments that do not actually state the rule (one-off remarks, exceptions, other languages or scopes) and narrows rule text that claims more than its comments say, and near-duplicate rules are merged in a final pass.
   - A rule's confidence is its number of distinct source pull requests divided by 5, capped at 1, and halved when only one reviewer asked for it (such a rule also carries a "single reviewer" flag).
@@ -135,3 +157,7 @@ Written in TypeScript (strict mode).
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+## Using it as a library (unstable)
+
+`src/index.ts` is the library entry point (`import { extractRules, anthropicLlm, ... } from "precedent"` once built with `pnpm build`). Importing it has no side effects; the CLI lives in `cli.ts`. The package is not published to npm and the surface may change before 1.0: a test pins the list of exports so changes are deliberate. Tests and callers can swap the model for a recorded one (`cachedLlm` / `replayLlm`) and run the whole pipeline without network or credit.

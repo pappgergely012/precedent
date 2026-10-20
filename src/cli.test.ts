@@ -96,3 +96,74 @@ describe("cli export", () => {
     expect(bad.stderr).toContain("--format must be one of");
   });
 });
+
+describe("cli help, version and early validation", () => {
+  it("prints usage for --help and help, and the package version for --version", () => {
+    for (const args of [["--help"], ["-h"], ["help"]]) {
+      const r = run(args);
+      expect(r.status, args.join(" ")).toBe(0);
+      expect(r.stdout).toContain("precedent mine <owner/repo>");
+    }
+    const v = run(["--version"]);
+    expect(v.status).toBe(0);
+    expect(v.stdout.trim()).toBe(JSON.parse(readFileSync("package.json", "utf8")).version);
+    expect(run(["-v"]).stdout.trim()).toBe(v.stdout.trim());
+  });
+
+  it("explains a missing rules file for review instead of printing ENOENT", () => {
+    const r = run(["review", "--diff", "/dev/null", "--rules", "/nonexistent/rules.json"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('Rules file /nonexistent/rules.json not found. Run "precedent mine owner/repo --out /nonexistent/rules.json" first.');
+    expect(r.stderr).not.toContain("ENOENT");
+  });
+});
+
+describe("cli review with a missing diff file", () => {
+  it("says so in one line instead of printing ENOENT", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const rules = join(dir, "rules.json");
+    writeFileSync(rules, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-19T00:00:00.000Z", rules: [] }));
+    const r = run(["review", "--diff", "/nonexistent/pr.diff", "--rules", rules]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("Diff file /nonexistent/pr.diff not found.");
+    expect(r.stderr).not.toContain("ENOENT");
+  });
+});
+
+describe("cli review --dry-run", () => {
+  it("estimates the calls for a local diff without an API key or a model call, and honours --max-files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const sources = [1, 2].map((n) => ({ prNumber: n, reviewer: "anna", commentUrl: `https://github.com/o/r/pull/${n}#discussion_r${n}` }));
+    const rules = join(dir, "rules.json");
+    writeFileSync(rules, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-19T00:00:00.000Z", rules: [{ id: "r1", description: "Use gate() in tests.", scope: ["src/**"], confidence: 0.5, sources }] }));
+    const file = (name: string) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1,1 +1,2 @@\n keep\n+added\n`;
+    const diff = join(dir, "pr.diff");
+    writeFileSync(diff, [file("src/a.ts"), file("src/b ts/c.ts"), file("docs/readme.md")].join(""));
+    const r = run(["review", "--diff", diff, "--rules", rules, "--dry-run"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Reviewing 3 changed files");
+    expect(r.stdout).toContain("2 of 3 files have an applicable rule; 2 model calls");
+    expect(r.stdout).toMatch(/\d+ input and \d+ output tokens/);
+    expect(r.stdout).toContain("No model call was made.");
+    const capped = run(["review", "--diff", diff, "--rules", rules, "--dry-run", "--max-files", "1"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
+    expect(capped.stdout).toContain("1 model calls (cap --max-files 1)");
+  });
+});
+
+describe("cli per-command help", () => {
+  it("prints only that command's usage and flags", () => {
+    const r = run(["mine", "--help"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("precedent mine <owner/repo>");
+    expect(r.stdout).toContain("--redact");
+    expect(r.stdout).toContain("--cache FILE / --no-cache");
+    expect(r.stdout).not.toContain("precedent export");
+    expect(run(["help", "export"]).stdout).toContain("between markers");
+    expect(run(["review", "-h"]).stdout).toContain("only --post posts them");
+  });
+  it("lists every command, and --redact on mine, stability and review, in the overview", () => {
+    const all = run(["--help"]).stdout;
+    for (const c of ["check", "mine", "export", "stability", "review"]) expect(all).toContain(`precedent ${c}`);
+    for (const c of ["mine", "stability", "review"]) expect(all.split("\n").filter((l) => l.includes(`precedent ${c}`)).every((l) => l.includes("--redact"))).toBe(true);
+  });
+});

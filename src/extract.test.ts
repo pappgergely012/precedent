@@ -410,3 +410,77 @@ describe("extractRules detail output", () => {
     expect(lines).toEqual(["  filtered: tool-artefact: Add settings.local.json to .gitignore in .claude (.claude/**)"]);
   });
 });
+
+describe("extraction votes (flag-gated variant)", () => {
+  const rateLimit = (id: number) => ({ id, principle: "Add a rate limit to new endpoints" });
+  /** Scripted model: answers extraction prompts from a queue, then merge/audit prompts. */
+  const scripted = (extraction: unknown[], rest: unknown[]) => {
+    let e = 0;
+    let r = 0;
+    const llm = {
+      calls: 0,
+      parse: async (prompt: string, schema: { parse: (v: unknown) => unknown }) => {
+        llm.calls++;
+        return schema.parse(prompt.includes("You analyse code review comments") ? extraction[e++] : rest[r++]);
+      },
+    };
+    return llm as unknown as Llm & { calls: number };
+  };
+  const comments = [comment(1), comment(2), comment(3)];
+
+  it("asks three times and keeps a comment only when most answers call it a rule", async () => {
+    const yes = { items: [rateLimit(1), rateLimit(2), { id: 3, principle: null }] };
+    const mixed = { items: [{ id: 1, principle: null }, rateLimit(2), { id: 3, principle: null }] };
+    const llm = scripted([yes, mixed, yes], [
+      { rules: [{ description: "Add a rate limit to every new endpoint", scope: [], commentIds: [1, 2] }] },
+      { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+    ]);
+    const lines: string[] = [];
+    const rules = await extractRules(comments, llm, { extractionVotes: 3, onProgress: (m) => lines.push(m) });
+    expect(lines.some((l) => l.includes("each asked 3 times"))).toBe(true);
+    expect(llm.calls).toBe(3 + 2);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.sources.map((s) => s.prNumber)).toEqual([101, 102]);
+  });
+
+  it("drops a comment that only one of three answers calls a rule", async () => {
+    const one = { items: [rateLimit(1), { id: 2, principle: null }, { id: 3, principle: null }] };
+    const none = { items: [{ id: 1, principle: null }, { id: 2, principle: null }, { id: 3, principle: null }] };
+    const llm = scripted([one, none, none], []);
+    expect(await extractRules(comments, llm, { extractionVotes: 3 })).toEqual([]);
+    expect(llm.calls).toBe(3);
+  });
+
+  it("is identical to the default when the option is 1 or unset", async () => {
+    const run = async (opts: { extractionVotes?: number }) => {
+      const yes = { items: [rateLimit(1), rateLimit(2), { id: 3, principle: null }] };
+      const llm = scripted([yes], [
+        { rules: [{ description: "Add a rate limit to every new endpoint", scope: [], commentIds: [1, 2] }] },
+        { rules: [{ index: 0, supportingIds: [1, 2], revisedDescription: null }] },
+      ]);
+      return { rules: await extractRules(comments, llm, opts), calls: llm.calls };
+    };
+    expect(await run({ extractionVotes: 1 })).toEqual(await run({}));
+  });
+});
+
+describe("sharedMergeThreshold (flag-gated variant)", () => {
+  it("pools rules that share only one comment when the threshold is near zero, and not by default", async () => {
+    const ids = [1, 2, 3, 4, 5, 6, 7, 8];
+    const answers = () => [
+      { items: ids.map((id) => ({ id, principle: `Rule text number ${id} about endpoints` })) },
+      { rules: [
+        { description: "Add a rate limit to new endpoints", scope: [], commentIds: [1, 2, 3, 4] },
+        { description: "Document rate limits on endpoints", scope: [], commentIds: [4, 5, 6, 7, 8] },
+      ] },
+      { rules: [{ index: 0, supportingIds: [1, 2, 3, 4], revisedDescription: null }, { index: 1, supportingIds: [4, 5, 6, 7, 8], revisedDescription: null }] },
+      { groups: [] },
+    ];
+    const all = ids.map((id) => comment(id));
+    // one shared comment out of the smaller rule's four is 0.25, below the default 0.5
+    expect(await extractRules(all, fakeLlm(...answers()))).toHaveLength(2);
+    const pooled = await extractRules(all, fakeLlm(...answers()), { sharedMergeThreshold: 0.01 });
+    expect(pooled).toHaveLength(1);
+    expect(pooled[0]!.sources).toHaveLength(8);
+  });
+});

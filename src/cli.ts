@@ -2,27 +2,25 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { parseDiff } from "./diff.js";
-import { commentText, extractRules, isSingleReviewer, selectUsable } from "./extract.js";
-import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
+import { cacheText, extractRules, isSingleReviewer, selectUsable } from "./extract.js";
+import { fetchPullDiff, fetchReviewComments, GitHubApiError, postPullReview } from "./github.js";
 import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
-import { formatComment, reviewDiff } from "./review.js";
+import { chooseFiles, estimateReview, formatComment, reviewDiff, rulesForFile } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
+import { describeFit, fitMetrics } from "./fit.js";
+import { loadOrFetchComments } from "./snapshot.js";
 import { cachedLlm, describeCache, fileStore } from "./llmcache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { ExportError, renderBlock, selectRules, suspiciousRules, writeExport, type ExportFormat } from "./export.js";
 import { describeEstimate, estimateUsage } from "./estimate.js";
 import { renderMineOutput } from "./mineoutput.js";
+import { helpFor } from "./help.js";
 import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
-const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--dry-run] [--verify] [--docs] [--all] [--verbose]
-  precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
-  precedent stability <owner/repo> [--runs N] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
-  precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
-  precedent review --diff FILE [--rules FILE]`;
+const USAGE = helpFor();
 
 const DEFAULT_RULES_FILE = ".precedent/rules.json";
 
@@ -35,6 +33,8 @@ function parseCli() {
   }
 }
 const OPTIONS = {
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
   out: { type: "string" },
   rules: { type: "string" },
   diff: { type: "string" },
@@ -55,7 +55,11 @@ const OPTIONS = {
   all: { type: "boolean" },
   redact: { type: "boolean" },
   "pre-merge": { type: "boolean" },
+  "comments-file": { type: "string" },
+  "extraction-votes": { type: "string" },
+  "shared-merge": { type: "string" },
   "dry-run": { type: "boolean" },
+  "max-files": { type: "string" },
   verbose: { type: "boolean" },
   "max-comments": { type: "string" },
   "min-occurrences": { type: "string" },
@@ -64,9 +68,28 @@ const OPTIONS = {
 const { positionals, values } = parseCli();
 const [command, repo, prArg] = positionals;
 
+if (values.version) {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  console.log(pkg.version);
+  process.exit(0);
+}
+if (values.help || command === "help") {
+  console.log(helpFor(command === "help" ? repo : command));
+  process.exit(0);
+}
+
 function fail(message: string): never {
   console.error(message);
   process.exit(1);
+}
+
+/** `--shared-merge X`: a share between 0 (exclusive) and 1, or the default. */
+function sharedMergeFlag(): number | undefined {
+  const raw = values["shared-merge"];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!(value > 0 && value <= 1)) fail("--shared-merge needs a number above 0 and up to 1.");
+  return value;
 }
 
 /** Read `--name <positive integer>`, or use the fallback when the flag is absent. */
@@ -109,10 +132,12 @@ async function main(): Promise<void> {
     if (!process.env.GITHUB_TOKEN) {
       console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour and mining a large repository will hit the limit.");
     }
-    const comments = await fetchReviewComments(repo, {
-      token: process.env.GITHUB_TOKEN,
-      maxPages: intFlag("max-pages", 30),
-    });
+    const comments = await loadOrFetchComments(
+      values["comments-file"],
+      repo,
+      () => fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) }),
+      progress,
+    );
     const prs = new Set(comments.map((c) => c.prNumber));
     console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
     const mask = redactor();
@@ -121,8 +146,9 @@ async function main(): Promise<void> {
     if (values["dry-run"]) {
       const usable = selectUsable(comments, { maxComments: intFlag("max-comments", 1000), maxAgeDays: intFlag("max-age-days", 730) });
       const cache = values.cache ? await fileCache(values.cache, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
-      const pending = cache ? usable.filter((c) => cache.get(c.id, commentText(c)) === undefined).length : usable.length;
-      for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending }), usable.length, 1)) console.log(line);
+      const votes = intFlag("extraction-votes", 1);
+      const pending = cache ? usable.filter((c) => cache.get(c.id, cacheText(c, votes)) === undefined).length : usable.length;
+      for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending, votes }), usable.length, votes)) console.log(line);
       return;
     }
 
@@ -137,6 +163,8 @@ async function main(): Promise<void> {
       minOccurrences: intFlag("min-occurrences", 2),
       maxAgeDays: intFlag("max-age-days", 730),
       preMerge: values["pre-merge"],
+      extractionVotes: intFlag("extraction-votes", 1),
+      sharedMergeThreshold: sharedMergeFlag(),
       cache: mineCache,
       onProgress: progress,
       onDetail: values.verbose ? progress : undefined,
@@ -179,6 +207,30 @@ async function main(): Promise<void> {
       await writeRulesFile(values.out, repo, rules, documentedOnly);
       console.log(`\nWrote ${rules.length} rules to ${values.out}`);
     }
+  } else if (command === "check" && repo) {
+    if (!process.env.GITHUB_TOKEN) {
+      console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour.");
+    }
+    // The last 12 months, at most 1,000 comments: the same window the market survey used.
+    const since = new Date(Date.now() - 365 * 86_400_000).toISOString();
+    let window = "in the last 12 months";
+    const comments = await loadOrFetchComments(
+      values["comments-file"],
+      repo,
+      async () => {
+        try {
+          return await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: 10, minTopLevel: 0, since });
+        } catch (error) {
+          // GitHub answers the dated query with a server error for some very large repositories.
+          if (!(error instanceof GitHubApiError) || error.status < 500) throw error;
+          window = "(the newest 1,000 comments, whatever their age)";
+          return fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: 10, minTopLevel: 0 });
+        }
+      },
+      progress,
+    );
+    if (values["comments-file"]) window = "in the saved snapshot";
+    for (const line of describeFit(repo, fitMetrics(comments), window)) console.log(line);
   } else if (command === "export") {
     const format = values.format;
     if (format !== "claude" && format !== "agents" && format !== "cursor") fail("--format must be one of: claude, agents, cursor.");
@@ -221,7 +273,7 @@ async function main(): Promise<void> {
     requireAnthropicKey();
     const runs = intFlag("runs", 3);
     const top = intFlag("top", 10);
-    const comments = await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) });
+    const comments = await loadOrFetchComments(values["comments-file"], repo, () => fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) }), progress);
     console.log(`Fetched ${comments.length} review comments once; mining ${runs} times (each run costs about as much as one \`mine\`).`);
     const stabilityMask = redactor();
     const sendableComments = values.redact ? comments.map((c) => ({ ...c, body: stabilityMask.text(c.body) })) : comments;
@@ -232,7 +284,7 @@ async function main(): Promise<void> {
     const llm = anthropicLlm();
     const results = [];
     for (let i = 1; i <= runs; i++) {
-      results.push(await extractRules(sendableComments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
+      results.push(await extractRules(sendableComments, llm, { maxComments: intFlag("max-comments", 1000), preMerge: values["pre-merge"], extractionVotes: intFlag("extraction-votes", 1), sharedMergeThreshold: sharedMergeFlag(), cache: pinned, onProgress: values.verbose ? stageLog(i) : undefined }));
       console.log(`Run ${i}/${runs}: ${results[i - 1]!.length} rules`);
     }
     const cuts = stabilityCuts(results, top);
@@ -259,7 +311,7 @@ async function main(): Promise<void> {
       console.log(`Wrote every rule of the ${runs} runs to ${values.out}`);
     }
   } else if (command === "review" && (values.diff || (repo && prArg))) {
-    requireAnthropicKey();
+    if (!values["dry-run"]) requireAnthropicKey();
     const token = process.env.GITHUB_TOKEN;
     let prNumber = 0;
     if (!values.diff) {
@@ -270,15 +322,33 @@ async function main(): Promise<void> {
       fail("--post needs a pull request and GITHUB_TOKEN with permission to write pull request reviews.");
     }
 
-    const { rules } = await readRulesFile(values.rules ?? DEFAULT_RULES_FILE);
-    const diffText = values.diff ? await readFile(values.diff, "utf8") : await fetchPullDiff(repo!, prNumber, { token });
+    const reviewRulesPath = values.rules ?? DEFAULT_RULES_FILE;
+    const { rules } = await readRulesFile(reviewRulesPath).catch((error: NodeJS.ErrnoException) =>
+      fail(error.code === "ENOENT" ? `Rules file ${reviewRulesPath} not found. Run "precedent mine owner/repo --out ${reviewRulesPath}" first.` : `Cannot read ${reviewRulesPath}: ${error.message.split("\n")[0]}`),
+    );
+    const diffText = values.diff
+      ? await readFile(values.diff, "utf8").catch((error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Diff file ${values.diff} not found.` : `Cannot read ${values.diff}: ${error.message.split("\n")[0]}`))
+      : await fetchPullDiff(repo!, prNumber, { token });
     const diffMask = redactor();
     const files = parseDiff(diffText).map((f) => ({ ...f, patch: diffMask.text(f.patch) }));
     diffMask.report();
     const target = values.diff ? values.diff : `${repo}#${prNumber}`;
     console.log(`Reviewing ${files.length} changed files of ${target} against ${rules.length} rules.`);
 
-    const violations = await reviewDiff(files, rules, anthropicLlm(), { onProgress: progress });
+    // One model call per file that some rule applies to; a very large PR is capped so it cannot run up an unbounded bill.
+    const maxFiles = intFlag("max-files", 100);
+    const reviewable = files.filter((f) => rulesForFile(rules, f.path).length > 0);
+    const chosen = chooseFiles(reviewable, maxFiles);
+    if (values["dry-run"]) {
+      const e = estimateReview(chosen, rules);
+      console.log(`Dry run: ${reviewable.length} of ${files.length} files have an applicable rule; ${e.calls} model calls (cap --max-files ${maxFiles}), roughly ${e.inputTokens.toLocaleString("en-US")} input and ${e.outputTokens.toLocaleString("en-US")} output tokens (a rough estimate from text length). No model call was made.`);
+      return;
+    }
+    if (chosen.length < reviewable.length) {
+      console.log(`Notice: ${reviewable.length} files have an applicable rule; only the ${maxFiles} with the most added lines are reviewed (ties by path; raise --max-files to review more).`);
+    }
+
+    const violations = await reviewDiff(chosen, rules, anthropicLlm(), { onProgress: progress });
     const byId = new Map(rules.map((r) => [r.id, r]));
     const comments = violations.map((v) => ({ path: v.path, line: v.line, body: formatComment(v, byId.get(v.ruleId)!) }));
 

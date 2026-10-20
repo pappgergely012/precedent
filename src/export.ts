@@ -71,7 +71,7 @@ export function cleanText(text: string, maxChars = MAX_RULE_CHARS): string {
 /** A glob is rendered inside backticks, so it must not contain one. */
 const cleanGlob = (glob: string) => cleanText(glob, 200).replace(/`/g, "'");
 
-const SAFE_URL = /^https:\/\/[^\s<>()"'`\\]+$/;
+export const SAFE_URL = /^https:\/\/[^\s<>()"'`\\]+$/;
 
 /** One source per pull request, so three links mean three different discussions. Unsafe URLs are skipped. */
 function citations(rule: Rule): { prNumber: number; url: string }[] {
