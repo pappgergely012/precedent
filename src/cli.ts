@@ -168,6 +168,7 @@ async function main(): Promise<void> {
       sharedMergeThreshold: sharedMergeFlag(),
       cache: mineCache,
       onProgress: progress,
+      onDetail: values.verbose ? progress : undefined,
     });
     if (values.verify) {
       const before = rules.length;

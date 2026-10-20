@@ -7,7 +7,7 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
   },
   mine: {
     usage: [
-      "precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--redact] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all]",
+      "precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--redact] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all] [--verbose]",
     ],
     about: "Mine the rules a team enforces in review from past pull request comments. Needs GITHUB_TOKEN and PRECEDENT_ANTHROPIC_API_KEY.",
     flags: [
