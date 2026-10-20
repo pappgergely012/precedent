@@ -16,7 +16,7 @@ describe("diffRules", () => {
     ];
     const d = diffRules(approved, fresh);
     expect(d.same.map((m) => [m.approved.id, m.fresh.id])).toEqual([["a1", "f9"]]);
-    expect(d.reworded.map((m) => [m.approved.id, m.fresh.id])).toEqual([["a2", "f8"]]);
+    expect([...d.reworded, ...d.related].map((m) => [m.approved.id, m.fresh.id])).toEqual([["a2", "f8"]]);
     expect(d.added.map((r) => r.id)).toEqual(["f7"]);
     expect(d.missing.map((r) => r.id)).toEqual(["a3"]);
   });
@@ -43,7 +43,7 @@ describe("diffRules", () => {
 
   it("renders a summary that never says an approved rule should be removed", () => {
     const text = renderRuleDiff(diffRules(approved, [rule("f1", "Add a rate limit.", 20, 21)]));
-    expect(text).toContain("0 unchanged, 0 reworded, 1 new, 3 not found again");
+    expect(text).toContain("0 unchanged, 0 reworded, 0 related, 1 new, 3 not found again");
     expect(text).toContain("+ Add a rate limit. (2 comments)");
     expect(text).toContain("keep unless the team retires it");
   });
@@ -53,7 +53,7 @@ describe("diffRules: edge cases from review and QA", () => {
   it("lists new candidates that share a comment with an approved rule, with the count", () => {
     const d = diffRules([rule("a", "Approved rule.", 1, 2, 3, 4)], [rule("f", "Different wording entirely.", 4, 50, 51)]);
     expect(d.added).toHaveLength(1);
-    expect(d.related.get(d.added[0]!)![0]).toMatchObject({ shared: 1 });
+    expect(d.sharing.get(d.added[0]!)![0]).toMatchObject({ shared: 1 });
     expect(renderRuleDiff(d)).toContain("related to approved: Approved rule. (1 shared comment)");
   });
 
@@ -62,14 +62,21 @@ describe("diffRules: edge cases from review and QA", () => {
     expect(d.reworded).toHaveLength(1);
   });
 
-  it("two different rules that cite the same comments are not paired as reworded: they stay new / not found, with the evidence shown", () => {
+  it("same evidence with different wording goes to a separate 'related' bucket: not reworded, not new, not missing", () => {
     const approved = [rule("a", "No docstrings in tests.", 1, 2, 3)];
     const fresh = [rule("f", "Do not put ticket numbers in test comments.", 1, 2, 3, 4)];
     const d = diffRules(approved, fresh);
-    expect(d.same.length + d.reworded.length).toBe(0);
-    expect(d.added.map((r) => r.id)).toEqual(["f"]);
-    expect(d.missing.map((r) => r.id)).toEqual(["a"]);
-    expect(renderRuleDiff(d)).toContain("related to approved: No docstrings in tests. (3 shared comments)");
+    expect(d.related.map((m) => [m.approved.id, m.fresh.id])).toEqual([["a", "f"]]);
+    expect(d.same.length + d.reworded.length + d.added.length + d.missing.length).toBe(0);
+    const text = renderRuleDiff(d);
+    expect(text).toContain("1 related, 0 new, 0 not found again");
+    expect(text).toContain("decide if it is the same rule");
+  });
+
+  it("similar wording with the same evidence is reworded", () => {
+    const d = diffRules([rule("a", "Name hooks with a use prefix.", 1, 2, 3)], [rule("f", "Hooks should have a use prefix in the name.", 1, 2, 3)]);
+    expect(d.reworded).toHaveLength(1);
+    expect(d.related).toHaveLength(0);
   });
 
   it("measures wording by words, ignoring case, punctuation and short words", () => {

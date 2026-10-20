@@ -195,7 +195,7 @@ describe("cli compare", () => {
     const out = join(dir, "new.json");
     const res = run(["compare", "--approved", approved, "--rules", fresh, "--out", out], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" });
     expect(res.status).toBe(0);
-    expect(res.stdout).toContain("1 unchanged, 0 reworded, 1 new, 0 not found again");
+    expect(res.stdout).toContain("1 unchanged, 0 reworded, 0 related, 1 new, 0 not found again");
     expect(readFileSync(approved, "utf8")).toBe(before);
     expect(JSON.parse(readFileSync(out, "utf8")).rules.map((x: { id: string }) => x.id)).toEqual(["f2"]);
   });

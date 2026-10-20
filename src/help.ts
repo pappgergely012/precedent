@@ -43,13 +43,14 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
     ],
   },
   export: {
-    usage: ["precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]"],
+    usage: ["precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging] [--all]"],
     about: "Write the core rules into CLAUDE.md, AGENTS.md or .cursorrules between markers. No network, no model. Read the result before committing it.",
     flags: [
       ["--format claude|agents|cursor", "target file style"],
       ["--out FILE", "update FILE (a .bak of the original is kept once); without it the block is printed"],
       ["--min-confidence N / --max-rules N", "leave out weak rules; cap the list (default 30)"],
       ["--include-single-reviewer / --include-emerging", "also export rules with one reviewer or thinner evidence"],
+      ["--all", "export every rule in the file (the default for a file written by `approve`)"],
     ],
   },
   stability: {
