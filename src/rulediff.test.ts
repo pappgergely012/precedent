@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule } from "./rule.js";
-import { diffRules, renderRuleDiff } from "./rulediff.js";
+import { diffRules, MIN_WORDING_SIMILARITY, renderRuleDiff, wordingSimilarity } from "./rulediff.js";
 
 const src = (...ns: number[]) => ns.map((n) => ({ prNumber: n, commentUrl: `https://github.com/o/r/pull/${n}#discussion_r${n}`, reviewer: `r${n}` }));
 const rule = (id: string, description: string, ...ns: number[]): Rule => ({ id, description, scope: [], confidence: 0.6, sources: src(...ns) });
@@ -22,7 +22,7 @@ describe("diffRules", () => {
   });
 
   it("does not match on a single shared comment out of three, and matches each rule at most once", () => {
-    const d = diffRules([rule("a", "One.", 1, 2, 3)], [rule("x", "Other.", 3, 50, 51), rule("y", "Same thing.", 1, 2, 3), rule("z", "Same thing again.", 1, 2, 3)]);
+    const d = diffRules([rule("a", "One thing.", 1, 2, 3)], [rule("x", "Other.", 3, 50, 51), rule("y", "One thing.", 1, 2, 3), rule("z", "One thing again.", 1, 2, 3)]);
     expect(d.same.length + d.reworded.length).toBe(1);
     expect(d.added).toHaveLength(2);
     expect(d.missing).toHaveLength(0);
@@ -57,9 +57,24 @@ describe("diffRules: edge cases from review and QA", () => {
     expect(renderRuleDiff(d)).toContain("related to approved: Approved rule. (1 shared comment)");
   });
 
-  it("a one-source approved rule is absorbed by a large fresh rule that cites its comment (documented behaviour of the 0.5 rule)", () => {
-    const d = diffRules([rule("a", "Narrow.", 1)], [rule("f", "Broad.", 1, 2, 3, 4, 5, 6)]);
+  it("a one-source approved rule is absorbed by a large fresh rule that cites its comment and says similar things", () => {
+    const d = diffRules([rule("a", "Name hooks with a use prefix.", 1)], [rule("f", "Hooks should have a use prefix in the name.", 1, 2, 3, 4, 5, 6)]);
     expect(d.reworded).toHaveLength(1);
+  });
+
+  it("two different rules that cite the same comments are not paired as reworded: they stay new / not found, with the evidence shown", () => {
+    const approved = [rule("a", "No docstrings in tests.", 1, 2, 3)];
+    const fresh = [rule("f", "Do not put ticket numbers in test comments.", 1, 2, 3, 4)];
+    const d = diffRules(approved, fresh);
+    expect(d.same.length + d.reworded.length).toBe(0);
+    expect(d.added.map((r) => r.id)).toEqual(["f"]);
+    expect(d.missing.map((r) => r.id)).toEqual(["a"]);
+    expect(renderRuleDiff(d)).toContain("related to approved: No docstrings in tests. (3 shared comments)");
+  });
+
+  it("measures wording by words, ignoring case, punctuation and short words", () => {
+    expect(wordingSimilarity("Use gate() in tests.", "use GATE in the tests")).toBeGreaterThanOrEqual(MIN_WORDING_SIMILARITY);
+    expect(wordingSimilarity("No docstrings in tests.", "Do not put ticket numbers in test comments.")).toBeLessThan(MIN_WORDING_SIMILARITY);
   });
 
   it("reports rules without sources as cannot be matched instead of producing NaN", () => {

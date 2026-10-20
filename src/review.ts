@@ -180,6 +180,6 @@ export function formatComment(violation: Violation, rule: Rule): string {
     .slice(0, 2)
     .map((s) => `[#${s.prNumber}](${s.commentUrl})`)
     .join(", ");
-  const why = evidence ? `Reviewers asked for this before in ${evidence} (${rule.sources.length} comments in total).` : `${rule.sources.length} earlier review comments asked for this.`;
+  const why = rule.sources.length === 0 ? "This rule was written by your team." : evidence ? `Reviewers asked for this before in ${evidence} (${rule.sources.length} comments in total).` : `${rule.sources.length} earlier review comments asked for this.`;
   return `${sanitizeCommentText(violation.message, 300)}\n\n**Team rule:** ${sanitizeCommentText(rule.description, 500)}\n\n${why}`;
 }

@@ -285,7 +285,7 @@ async function main(): Promise<void> {
     const diff = diffRules(approvedFile.rules, freshFile.rules);
     console.log(renderRuleDiff(diff));
     if (values.out) {
-      await writeRulesFile(values.out, freshFile.repo, diff.added);
+      await writeRulesFile(values.out, freshFile.repo, diff.added, undefined, freshFile.minedAt);
       console.log(`\nWrote ${diff.added.length} new candidates to ${values.out}. The approved file is not changed.`);
     }
   } else if (command === "export") {
@@ -303,6 +303,9 @@ async function main(): Promise<void> {
       maxRules: values["max-rules"] === undefined ? undefined : intFlag("max-rules", 30),
       includeSingleReviewer: values["include-single-reviewer"],
       includeEmerging: values["include-emerging"],
+      // A file the team approved is its own selection: export all of it (the cap still applies).
+      all: samePath(rulesPath, APPROVED_RULES_FILE),
+      rulesPath,
     };
     const block = renderBlock(file, exportOptions);
     const chosen = selectRules(file.rules, exportOptions);

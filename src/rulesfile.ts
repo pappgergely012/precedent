@@ -22,8 +22,9 @@ export async function writeRulesFile(
   repo: string,
   rules: Rule[],
   documentedOnly?: RulesFile["documentedOnly"],
+  minedAt: string = new Date().toISOString(),
 ): Promise<void> {
-  const file: RulesFile = { version: 1, repo, minedAt: new Date().toISOString(), rules, ...(documentedOnly ? { documentedOnly } : {}) };
+  const file: RulesFile = { version: 1, repo, minedAt, rules, ...(documentedOnly ? { documentedOnly } : {}) };
   await mkdir(dirname(path), { recursive: true });
   // Atomic: a crash or a full disk never leaves a half-written rules file.
   const tmp = `${path}.${process.pid}.tmp`;
