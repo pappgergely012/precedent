@@ -27,13 +27,20 @@ You get a ranked list of rules. Each rule has a one-sentence statement and links
 
 ## Install
 
-Precedent is not published to npm yet. From a clone (Node 22+, pnpm):
+Precedent is not on npm yet. The package is prepared for it (name `precedent-review`; the command it installs is `precedent`), so once it is published the install is:
+
+```bash
+npx precedent-review --help               # after publish: runs the CLI without installing
+npm install -g precedent-review           # after publish: puts `precedent` on your PATH
+```
+
+Until then, from a clone (Node 22+, pnpm):
 
 ```bash
 pnpm install && pnpm build
 node dist/cli.js mine owner/repo          # the commands below call this `precedent`
-npm pack                                  # makes precedent-0.0.0.tgz (only dist, README and LICENSE)
-npm install ./precedent-0.0.0.tgz         # in another project: `npx precedent --help`
+npm pack                                  # makes precedent-review-0.1.0.tgz (only dist, README and LICENSE)
+npm install ./precedent-review-0.1.0.tgz  # in another project: `npx precedent --help`
 ```
 
 `precedent --help` prints the usage and `precedent --version` the version.

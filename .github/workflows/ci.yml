@@ -22,3 +22,4 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm check:pack
+      - run: pnpm smoke:pack
