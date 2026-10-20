@@ -32,7 +32,8 @@
     "eval:docs": "tsx scripts/eval-docs.ts",
     "eval:docs:e2e": "tsx scripts/eval-docs-e2e.ts",
     "eval:refresh": "tsx scripts/eval-refresh.ts",
-    "check:pack": "node scripts/check-pack.mjs"
+    "check:pack": "node scripts/check-pack.mjs",
+    "snapshots": "tsx scripts/save-snapshots.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

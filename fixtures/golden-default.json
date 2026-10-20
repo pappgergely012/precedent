@@ -1,0 +1,1020 @@
+{
+  "producedBy": "7f7c3cee25c8b7a5daf9952435fa86d766a01ba6",
+  "promptHashes": [
+    "e7d1085c36b6b761",
+    "188ab0233793e173",
+    "442ef8f1e6e559a2",
+    "98a98e1d44f73ef5",
+    "4a948172bc6a72ef",
+    "695b77b4001830b5",
+    "ffa53e7e61fe31c6",
+    "f15654ade2a4ffd4",
+    "1b9b16f7ab4414e0",
+    "78fd826ba8b0d5d3",
+    "82ebd60c92ee85cc",
+    "435217520b9d99eb",
+    "598170d739a17ae3"
+  ],
+  "rules": [
+    {
+      "id": "rule-2",
+      "description": "Handle case 1 the same way",
+      "scope": [
+        "src/mod1/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1006,
+          "commentUrl": "https://github.com/o/r/pull/1006#discussion_r247",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1019,
+          "commentUrl": "https://github.com/o/r/pull/1019#discussion_r260",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1003,
+          "commentUrl": "https://github.com/o/r/pull/1003#discussion_r4",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1016,
+          "commentUrl": "https://github.com/o/r/pull/1016#discussion_r17",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1002,
+          "commentUrl": "https://github.com/o/r/pull/1002#discussion_r43",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1015,
+          "commentUrl": "https://github.com/o/r/pull/1015#discussion_r56",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1001,
+          "commentUrl": "https://github.com/o/r/pull/1001#discussion_r82",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1014,
+          "commentUrl": "https://github.com/o/r/pull/1014#discussion_r95",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1000,
+          "commentUrl": "https://github.com/o/r/pull/1000#discussion_r121",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1013,
+          "commentUrl": "https://github.com/o/r/pull/1013#discussion_r134",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1039,
+          "commentUrl": "https://github.com/o/r/pull/1039#discussion_r160",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1012,
+          "commentUrl": "https://github.com/o/r/pull/1012#discussion_r173",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1038,
+          "commentUrl": "https://github.com/o/r/pull/1038#discussion_r199",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1011,
+          "commentUrl": "https://github.com/o/r/pull/1011#discussion_r212",
+          "reviewer": "dee"
+        }
+      ]
+    },
+    {
+      "id": "rule-5",
+      "description": "Handle case 4 the same way",
+      "scope": [
+        "src/mod4/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1009,
+          "commentUrl": "https://github.com/o/r/pull/1009#discussion_r10",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1022,
+          "commentUrl": "https://github.com/o/r/pull/1022#discussion_r23",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1008,
+          "commentUrl": "https://github.com/o/r/pull/1008#discussion_r49",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1021,
+          "commentUrl": "https://github.com/o/r/pull/1021#discussion_r62",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1007,
+          "commentUrl": "https://github.com/o/r/pull/1007#discussion_r88",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1020,
+          "commentUrl": "https://github.com/o/r/pull/1020#discussion_r101",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1006,
+          "commentUrl": "https://github.com/o/r/pull/1006#discussion_r127",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1019,
+          "commentUrl": "https://github.com/o/r/pull/1019#discussion_r140",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1005,
+          "commentUrl": "https://github.com/o/r/pull/1005#discussion_r166",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1018,
+          "commentUrl": "https://github.com/o/r/pull/1018#discussion_r179",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1004,
+          "commentUrl": "https://github.com/o/r/pull/1004#discussion_r205",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1017,
+          "commentUrl": "https://github.com/o/r/pull/1017#discussion_r218",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1025,
+          "commentUrl": "https://github.com/o/r/pull/1025#discussion_r226",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1038,
+          "commentUrl": "https://github.com/o/r/pull/1038#discussion_r239",
+          "reviewer": "cy"
+        }
+      ]
+    },
+    {
+      "id": "rule-8",
+      "description": "Handle case 7 the same way",
+      "scope": [
+        "src/mod0/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1031,
+          "commentUrl": "https://github.com/o/r/pull/1031#discussion_r232",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1004,
+          "commentUrl": "https://github.com/o/r/pull/1004#discussion_r245",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1006,
+          "commentUrl": "https://github.com/o/r/pull/1006#discussion_r7",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1019,
+          "commentUrl": "https://github.com/o/r/pull/1019#discussion_r20",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1005,
+          "commentUrl": "https://github.com/o/r/pull/1005#discussion_r46",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1018,
+          "commentUrl": "https://github.com/o/r/pull/1018#discussion_r59",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1004,
+          "commentUrl": "https://github.com/o/r/pull/1004#discussion_r85",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1017,
+          "commentUrl": "https://github.com/o/r/pull/1017#discussion_r98",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1003,
+          "commentUrl": "https://github.com/o/r/pull/1003#discussion_r124",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1016,
+          "commentUrl": "https://github.com/o/r/pull/1016#discussion_r137",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1002,
+          "commentUrl": "https://github.com/o/r/pull/1002#discussion_r163",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1015,
+          "commentUrl": "https://github.com/o/r/pull/1015#discussion_r176",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1001,
+          "commentUrl": "https://github.com/o/r/pull/1001#discussion_r202",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1014,
+          "commentUrl": "https://github.com/o/r/pull/1014#discussion_r215",
+          "reviewer": "cy"
+        }
+      ]
+    },
+    {
+      "id": "rule-11",
+      "description": "Handle case 10 the same way",
+      "scope": [
+        "src/mod3/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1001,
+          "commentUrl": "https://github.com/o/r/pull/1001#discussion_r2",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1027,
+          "commentUrl": "https://github.com/o/r/pull/1027#discussion_r28",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1000,
+          "commentUrl": "https://github.com/o/r/pull/1000#discussion_r41",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1026,
+          "commentUrl": "https://github.com/o/r/pull/1026#discussion_r67",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1039,
+          "commentUrl": "https://github.com/o/r/pull/1039#discussion_r80",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1025,
+          "commentUrl": "https://github.com/o/r/pull/1025#discussion_r106",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1038,
+          "commentUrl": "https://github.com/o/r/pull/1038#discussion_r119",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1024,
+          "commentUrl": "https://github.com/o/r/pull/1024#discussion_r145",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1037,
+          "commentUrl": "https://github.com/o/r/pull/1037#discussion_r158",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1023,
+          "commentUrl": "https://github.com/o/r/pull/1023#discussion_r184",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1036,
+          "commentUrl": "https://github.com/o/r/pull/1036#discussion_r197",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1022,
+          "commentUrl": "https://github.com/o/r/pull/1022#discussion_r223",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1028,
+          "commentUrl": "https://github.com/o/r/pull/1028#discussion_r229",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1001,
+          "commentUrl": "https://github.com/o/r/pull/1001#discussion_r242",
+          "reviewer": "bob"
+        }
+      ]
+    },
+    {
+      "id": "rule-13",
+      "description": "Handle case 12 the same way",
+      "scope": [
+        "src/mod5/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1015,
+          "commentUrl": "https://github.com/o/r/pull/1015#discussion_r16",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1028,
+          "commentUrl": "https://github.com/o/r/pull/1028#discussion_r29",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1014,
+          "commentUrl": "https://github.com/o/r/pull/1014#discussion_r55",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1027,
+          "commentUrl": "https://github.com/o/r/pull/1027#discussion_r68",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1013,
+          "commentUrl": "https://github.com/o/r/pull/1013#discussion_r94",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1026,
+          "commentUrl": "https://github.com/o/r/pull/1026#discussion_r107",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1012,
+          "commentUrl": "https://github.com/o/r/pull/1012#discussion_r133",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1025,
+          "commentUrl": "https://github.com/o/r/pull/1025#discussion_r146",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1011,
+          "commentUrl": "https://github.com/o/r/pull/1011#discussion_r172",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1024,
+          "commentUrl": "https://github.com/o/r/pull/1024#discussion_r185",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1010,
+          "commentUrl": "https://github.com/o/r/pull/1010#discussion_r211",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1023,
+          "commentUrl": "https://github.com/o/r/pull/1023#discussion_r224",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1029,
+          "commentUrl": "https://github.com/o/r/pull/1029#discussion_r230",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1015,
+          "commentUrl": "https://github.com/o/r/pull/1015#discussion_r256",
+          "reviewer": "dee"
+        }
+      ]
+    },
+    {
+      "id": "rule-4",
+      "description": "Handle case 3 the same way",
+      "scope": [
+        "src/mod3/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1034,
+          "commentUrl": "https://github.com/o/r/pull/1034#discussion_r235",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1007,
+          "commentUrl": "https://github.com/o/r/pull/1007#discussion_r248",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1004,
+          "commentUrl": "https://github.com/o/r/pull/1004#discussion_r5",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1030,
+          "commentUrl": "https://github.com/o/r/pull/1030#discussion_r31",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1003,
+          "commentUrl": "https://github.com/o/r/pull/1003#discussion_r44",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1029,
+          "commentUrl": "https://github.com/o/r/pull/1029#discussion_r70",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1002,
+          "commentUrl": "https://github.com/o/r/pull/1002#discussion_r83",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1028,
+          "commentUrl": "https://github.com/o/r/pull/1028#discussion_r109",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1001,
+          "commentUrl": "https://github.com/o/r/pull/1001#discussion_r122",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1027,
+          "commentUrl": "https://github.com/o/r/pull/1027#discussion_r148",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1000,
+          "commentUrl": "https://github.com/o/r/pull/1000#discussion_r161",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1026,
+          "commentUrl": "https://github.com/o/r/pull/1026#discussion_r187",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1039,
+          "commentUrl": "https://github.com/o/r/pull/1039#discussion_r200",
+          "reviewer": "dee"
+        }
+      ]
+    },
+    {
+      "id": "rule-7",
+      "description": "Handle case 6 the same way",
+      "scope": [
+        "src/mod6/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1010,
+          "commentUrl": "https://github.com/o/r/pull/1010#discussion_r11",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1036,
+          "commentUrl": "https://github.com/o/r/pull/1036#discussion_r37",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1009,
+          "commentUrl": "https://github.com/o/r/pull/1009#discussion_r50",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1035,
+          "commentUrl": "https://github.com/o/r/pull/1035#discussion_r76",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1008,
+          "commentUrl": "https://github.com/o/r/pull/1008#discussion_r89",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1034,
+          "commentUrl": "https://github.com/o/r/pull/1034#discussion_r115",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1007,
+          "commentUrl": "https://github.com/o/r/pull/1007#discussion_r128",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1033,
+          "commentUrl": "https://github.com/o/r/pull/1033#discussion_r154",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1006,
+          "commentUrl": "https://github.com/o/r/pull/1006#discussion_r167",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1032,
+          "commentUrl": "https://github.com/o/r/pull/1032#discussion_r193",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1005,
+          "commentUrl": "https://github.com/o/r/pull/1005#discussion_r206",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1026,
+          "commentUrl": "https://github.com/o/r/pull/1026#discussion_r227",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1012,
+          "commentUrl": "https://github.com/o/r/pull/1012#discussion_r253",
+          "reviewer": "anna"
+        }
+      ]
+    },
+    {
+      "id": "rule-9",
+      "description": "Handle case 8 the same way",
+      "scope": [
+        "src/mod1/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1024,
+          "commentUrl": "https://github.com/o/r/pull/1024#discussion_r25",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1037,
+          "commentUrl": "https://github.com/o/r/pull/1037#discussion_r38",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1023,
+          "commentUrl": "https://github.com/o/r/pull/1023#discussion_r64",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1036,
+          "commentUrl": "https://github.com/o/r/pull/1036#discussion_r77",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1022,
+          "commentUrl": "https://github.com/o/r/pull/1022#discussion_r103",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1035,
+          "commentUrl": "https://github.com/o/r/pull/1035#discussion_r116",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1021,
+          "commentUrl": "https://github.com/o/r/pull/1021#discussion_r142",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1034,
+          "commentUrl": "https://github.com/o/r/pull/1034#discussion_r155",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1020,
+          "commentUrl": "https://github.com/o/r/pull/1020#discussion_r181",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1033,
+          "commentUrl": "https://github.com/o/r/pull/1033#discussion_r194",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1019,
+          "commentUrl": "https://github.com/o/r/pull/1019#discussion_r220",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1000,
+          "commentUrl": "https://github.com/o/r/pull/1000#discussion_r241",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1013,
+          "commentUrl": "https://github.com/o/r/pull/1013#discussion_r254",
+          "reviewer": "bob"
+        }
+      ]
+    },
+    {
+      "id": "rule-3",
+      "description": "Handle case 2 the same way",
+      "scope": [
+        "src/mod2/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1000,
+          "commentUrl": "https://github.com/o/r/pull/1000#discussion_r1",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1013,
+          "commentUrl": "https://github.com/o/r/pull/1013#discussion_r14",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1039,
+          "commentUrl": "https://github.com/o/r/pull/1039#discussion_r40",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1012,
+          "commentUrl": "https://github.com/o/r/pull/1012#discussion_r53",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1038,
+          "commentUrl": "https://github.com/o/r/pull/1038#discussion_r79",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1011,
+          "commentUrl": "https://github.com/o/r/pull/1011#discussion_r92",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1037,
+          "commentUrl": "https://github.com/o/r/pull/1037#discussion_r118",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1010,
+          "commentUrl": "https://github.com/o/r/pull/1010#discussion_r131",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1036,
+          "commentUrl": "https://github.com/o/r/pull/1036#discussion_r157",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1009,
+          "commentUrl": "https://github.com/o/r/pull/1009#discussion_r170",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1035,
+          "commentUrl": "https://github.com/o/r/pull/1035#discussion_r196",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1008,
+          "commentUrl": "https://github.com/o/r/pull/1008#discussion_r209",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1037,
+          "commentUrl": "https://github.com/o/r/pull/1037#discussion_r238",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1010,
+          "commentUrl": "https://github.com/o/r/pull/1010#discussion_r251",
+          "reviewer": "cy"
+        }
+      ]
+    },
+    {
+      "id": "rule-1",
+      "description": "Handle case 0 the same way",
+      "scope": [
+        "src/mod0/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1012,
+          "commentUrl": "https://github.com/o/r/pull/1012#discussion_r13",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1025,
+          "commentUrl": "https://github.com/o/r/pull/1025#discussion_r26",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1011,
+          "commentUrl": "https://github.com/o/r/pull/1011#discussion_r52",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1024,
+          "commentUrl": "https://github.com/o/r/pull/1024#discussion_r65",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1010,
+          "commentUrl": "https://github.com/o/r/pull/1010#discussion_r91",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1023,
+          "commentUrl": "https://github.com/o/r/pull/1023#discussion_r104",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1009,
+          "commentUrl": "https://github.com/o/r/pull/1009#discussion_r130",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1022,
+          "commentUrl": "https://github.com/o/r/pull/1022#discussion_r143",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1008,
+          "commentUrl": "https://github.com/o/r/pull/1008#discussion_r169",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1021,
+          "commentUrl": "https://github.com/o/r/pull/1021#discussion_r182",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1007,
+          "commentUrl": "https://github.com/o/r/pull/1007#discussion_r208",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1020,
+          "commentUrl": "https://github.com/o/r/pull/1020#discussion_r221",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1009,
+          "commentUrl": "https://github.com/o/r/pull/1009#discussion_r250",
+          "reviewer": "bob"
+        }
+      ]
+    },
+    {
+      "id": "rule-6",
+      "description": "Handle case 5 the same way",
+      "scope": [
+        "src/mod5/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1003,
+          "commentUrl": "https://github.com/o/r/pull/1003#discussion_r244",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1016,
+          "commentUrl": "https://github.com/o/r/pull/1016#discussion_r257",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1018,
+          "commentUrl": "https://github.com/o/r/pull/1018#discussion_r19",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1031,
+          "commentUrl": "https://github.com/o/r/pull/1031#discussion_r32",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1017,
+          "commentUrl": "https://github.com/o/r/pull/1017#discussion_r58",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1030,
+          "commentUrl": "https://github.com/o/r/pull/1030#discussion_r71",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1016,
+          "commentUrl": "https://github.com/o/r/pull/1016#discussion_r97",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1029,
+          "commentUrl": "https://github.com/o/r/pull/1029#discussion_r110",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1015,
+          "commentUrl": "https://github.com/o/r/pull/1015#discussion_r136",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1028,
+          "commentUrl": "https://github.com/o/r/pull/1028#discussion_r149",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1014,
+          "commentUrl": "https://github.com/o/r/pull/1014#discussion_r175",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1027,
+          "commentUrl": "https://github.com/o/r/pull/1027#discussion_r188",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1013,
+          "commentUrl": "https://github.com/o/r/pull/1013#discussion_r214",
+          "reviewer": "bob"
+        }
+      ]
+    },
+    {
+      "id": "rule-10",
+      "description": "Handle case 9 the same way",
+      "scope": [
+        "src/mod2/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1032,
+          "commentUrl": "https://github.com/o/r/pull/1032#discussion_r233",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1018,
+          "commentUrl": "https://github.com/o/r/pull/1018#discussion_r259",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1007,
+          "commentUrl": "https://github.com/o/r/pull/1007#discussion_r8",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1033,
+          "commentUrl": "https://github.com/o/r/pull/1033#discussion_r34",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1006,
+          "commentUrl": "https://github.com/o/r/pull/1006#discussion_r47",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1032,
+          "commentUrl": "https://github.com/o/r/pull/1032#discussion_r73",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1005,
+          "commentUrl": "https://github.com/o/r/pull/1005#discussion_r86",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1031,
+          "commentUrl": "https://github.com/o/r/pull/1031#discussion_r112",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1004,
+          "commentUrl": "https://github.com/o/r/pull/1004#discussion_r125",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1030,
+          "commentUrl": "https://github.com/o/r/pull/1030#discussion_r151",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1003,
+          "commentUrl": "https://github.com/o/r/pull/1003#discussion_r164",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1029,
+          "commentUrl": "https://github.com/o/r/pull/1029#discussion_r190",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1002,
+          "commentUrl": "https://github.com/o/r/pull/1002#discussion_r203",
+          "reviewer": "cy"
+        }
+      ]
+    },
+    {
+      "id": "rule-12",
+      "description": "Handle case 11 the same way",
+      "scope": [
+        "src/mod4/**"
+      ],
+      "confidence": 1,
+      "sources": [
+        {
+          "prNumber": 1035,
+          "commentUrl": "https://github.com/o/r/pull/1035#discussion_r236",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1021,
+          "commentUrl": "https://github.com/o/r/pull/1021#discussion_r22",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1034,
+          "commentUrl": "https://github.com/o/r/pull/1034#discussion_r35",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1020,
+          "commentUrl": "https://github.com/o/r/pull/1020#discussion_r61",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1033,
+          "commentUrl": "https://github.com/o/r/pull/1033#discussion_r74",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1019,
+          "commentUrl": "https://github.com/o/r/pull/1019#discussion_r100",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1032,
+          "commentUrl": "https://github.com/o/r/pull/1032#discussion_r113",
+          "reviewer": "anna"
+        },
+        {
+          "prNumber": 1018,
+          "commentUrl": "https://github.com/o/r/pull/1018#discussion_r139",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1031,
+          "commentUrl": "https://github.com/o/r/pull/1031#discussion_r152",
+          "reviewer": "dee"
+        },
+        {
+          "prNumber": 1017,
+          "commentUrl": "https://github.com/o/r/pull/1017#discussion_r178",
+          "reviewer": "bob"
+        },
+        {
+          "prNumber": 1030,
+          "commentUrl": "https://github.com/o/r/pull/1030#discussion_r191",
+          "reviewer": "cy"
+        },
+        {
+          "prNumber": 1016,
+          "commentUrl": "https://github.com/o/r/pull/1016#discussion_r217",
+          "reviewer": "anna"
+        }
+      ]
+    }
+  ]
+}
