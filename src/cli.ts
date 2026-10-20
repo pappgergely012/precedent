@@ -55,6 +55,7 @@ const OPTIONS = {
   diff: { type: "string" },
   approved: { type: "string" },
   from: { type: "string" },
+  note: { type: "string" },
   to: { type: "string" },
   id: { type: "string", multiple: true },
   list: { type: "boolean" },
@@ -267,10 +268,11 @@ async function main(): Promise<void> {
       if (samePath(fromPath, toPath)) fail(`--from and --to are the same file (${toPath}); refusing to overwrite the candidates with the approved rules.`);
       const existing = existsSync(toPath) ? await readRulesFile(toPath).catch(missing(toPath)) : undefined;
       if (existing && existing.repo !== candidates.repo) fail(`${toPath} is for ${existing.repo} but ${fromPath} is for ${candidates.repo}; refusing to mix them.`);
-      const { rules, added, skipped } = approveRules(existing?.rules ?? [], chosen);
+      const { rules, added, skipped } = approveRules(existing?.rules ?? [], chosen, values.note?.trim().slice(0, 500) || undefined);
       for (const s of skipped) console.log(`skipped: ${safeLine(s.rule.description, 100)} (${safeLine(s.reason, 120)})`);
       if (added.length > 0) await writeRulesFile(toPath, candidates.repo, rules, undefined, existing?.minedAt ?? candidates.minedAt, "approved");
-      console.log(`${added.length} rule(s) approved into ${toPath} (${rules.length} in total)${added.length === 0 ? "; nothing written" : ""}. Existing approved rules are never changed.`);
+      const noteText = values.note?.trim() && added.length > 0 ? ` with the note "${safeLine(values.note, 80)}"` : "";
+      console.log(`${added.length} rule(s) approved${noteText} into ${toPath} (${rules.length} in total)${added.length === 0 ? "; nothing written" : ""}. Existing approved rules are never changed.`);
     }
   } else if (command === "compare") {
     const approvedPath = values.approved ?? (existsSync(APPROVED_RULES_FILE) ? APPROVED_RULES_FILE : undefined);

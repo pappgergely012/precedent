@@ -178,3 +178,35 @@ describe("approve marks its file so export shows everything, wherever it is save
     expect(sh(["export", "--format", "agents", "--rules", "cands.json", "--all"]).stdout).toContain("Thin but chosen.");
   });
 });
+
+describe("approve --note", () => {
+  const cli = resolve("src/cli.ts");
+  const tsx = resolve("node_modules/.bin/tsx");
+  const dir = mkdtempSync(join(tmpdir(), "precedent-note-"));
+  const sh = (args: string[]) => spawnSync(tsx, [cli, ...args], { cwd: dir, encoding: "utf8", env: { ...process.env, PRECEDENT_ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" } });
+  const NOTE = "Agreed in the Oct review meeting; owner: dana";
+
+  it("stores the note on newly approved rules, shows it in approve and compare, and never exports it or puts it in a prompt", async () => {
+    writeFileSync(join(dir, "cands.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-02-03T00:00:00Z", rules: [rule("rule-1", "Use gate() in tests.", 1, 2, 3), rule("rule-2", "Avoid default exports.", 4, 5, 6)] }));
+    const res = sh(["approve", "--from", "cands.json", "--to", "team.json", "--id", "rule-1", "--note", NOTE]);
+    expect(res.stdout).toContain(`with the note "${NOTE}"`);
+    const saved = JSON.parse(readFileSync(join(dir, "team.json"), "utf8"));
+    expect(saved.rules[0].note).toBe(NOTE);
+
+    // a later run that no longer has the rule: compare shows the note next to it
+    writeFileSync(join(dir, "later.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-03-03T00:00:00Z", rules: [rule("rule-9", "Something else.", 50, 51, 52)] }));
+    expect(sh(["compare", "--approved", "team.json", "--rules", "later.json"]).stdout).toContain(`[note: ${NOTE}]`);
+
+    expect(sh(["export", "--format", "agents", "--rules", "team.json"]).stdout).not.toContain("Oct review meeting");
+
+    const { reviewPrompt } = await import("./review.js");
+    expect(reviewPrompt({ path: "a.ts", patch: "1: +x", addedLines: new Set([1]) }, saved.rules, 12000)).not.toContain("Oct review meeting");
+  });
+
+  it("rejects notes over 500 characters at the schema, and trims what the CLI stores", () => {
+    const long = "x".repeat(600);
+    writeFileSync(join(dir, "c2.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-02-03T00:00:00Z", rules: [rule("rule-1", "Use gate() in tests.", 1, 2, 3)] }));
+    expect(sh(["approve", "--from", "c2.json", "--to", "t2.json", "--id", "rule-1", "--note", long]).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(dir, "t2.json"), "utf8")).rules[0].note).toHaveLength(500);
+  });
+});

@@ -26,14 +26,15 @@ export function selectCandidates(candidates: Rule[], pick: { ids?: string[]; all
 
 /**
  * Pin selected candidate rules into the team's approved set. Approved rules are never changed or removed: a candidate
- * that cites mostly the same comments as an approved rule is skipped, whatever its wording. Pure: returns the new set.
+ * that cites mostly the same comments as an approved rule is skipped, whatever its wording. A note is stored on the
+ * newly approved rules only. Pure: returns the new set.
  */
-export function approveRules(approved: Rule[], selected: Rule[]): { rules: Rule[]; added: Rule[]; skipped: Skipped[] } {
+export function approveRules(approved: Rule[], selected: Rule[], note?: string): { rules: Rule[]; added: Rule[]; skipped: Skipped[] } {
   const added: Rule[] = [];
   const skipped: Skipped[] = [];
   let rules = [...approved];
   for (const candidate of selected) {
-    const pinned: Rule = { ...candidate, id: approvedId(candidate) };
+    const pinned: Rule = { ...candidate, id: approvedId(candidate), ...(note ? { note } : {}) };
     const same = diffRules(rules, [pinned]);
     const match = [...same.same, ...same.reworded][0];
     if (match) {
