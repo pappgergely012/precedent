@@ -11,8 +11,13 @@ export interface RuleMatch {
 export interface RuleDiff {
   /** Same rule, same wording: nothing to review. */
   same: RuleMatch[];
-  /** Same evidence, different wording: the approved text stays; a person decides whether to adopt the new one. */
+  /** Same evidence, similar wording: the approved text stays; a person decides whether to adopt the new one. */
   reworded: RuleMatch[];
+  /**
+   * Same evidence, different wording. Usually a rewording, sometimes a different rule that cites the same comments;
+   * no word-overlap threshold separates the two, so a person decides. Counted neither as new nor as missing.
+   */
+  related: RuleMatch[];
   /** Not in the approved set: candidates for a person to approve. */
   added: Rule[];
   /** Approved, but this run did not find it again. Not a reason to remove it. */
@@ -20,12 +25,12 @@ export interface RuleDiff {
   /** Rules with no source comments on either side: nothing to match on, so they are reported, never guessed. */
   unmatchable: Rule[];
   /** For each new candidate that shares at least one comment with an approved rule (below the match threshold). */
-  related: Map<Rule, { approved: Rule; shared: number }[]>;
+  sharing: Map<Rule, { approved: Rule; shared: number }[]>;
 }
 
 export const MIN_SOURCE_OVERLAP = 0.5;
-/** Two rules that cite the same comments can still be different rules (one comment often says several things). */
-export const MIN_WORDING_SIMILARITY = 0.4;
+/** Wording this close (shared words / all words) with the same evidence counts as the same rule, reworded. */
+export const MIN_WORDING_SIMILARITY = 0.5;
 
 const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? []);
 
@@ -60,8 +65,7 @@ export function diffRules(approved: Rule[], fresh: Rule[]): RuleDiff {
   const pairs: RuleMatch[] = [];
   for (const a of approved) for (const f of fresh) {
     const overlap = overlapOf(a, f);
-    // Same evidence is not enough: the wording must also be similar, otherwise the pair is only "related".
-    if (overlap >= MIN_SOURCE_OVERLAP && (norm(a.description) === norm(f.description) || wordingSimilarity(a.description, f.description) >= MIN_WORDING_SIMILARITY)) pairs.push({ approved: a, fresh: f, overlap });
+    if (overlap >= MIN_SOURCE_OVERLAP) pairs.push({ approved: a, fresh: f, overlap });
   }
   pairs.sort((x, y) => y.overlap - x.overlap || x.approved.id.localeCompare(y.approved.id) || x.fresh.id.localeCompare(y.fresh.id));
   const usedA = new Set<Rule>();
@@ -74,33 +78,35 @@ export function diffRules(approved: Rule[], fresh: Rule[]): RuleDiff {
     matches.push(p);
   }
   const added = fresh.filter((f) => !usedF.has(f) && f.sources.length > 0);
-  const related = new Map<Rule, { approved: Rule; shared: number }[]>();
+  const sharing = new Map<Rule, { approved: Rule; shared: number }[]>();
   for (const f of added) {
     const hits = approved.map((a) => ({ approved: a, shared: sharedComments(a, f).shared })).filter((h) => h.shared > 0).sort((x, y) => y.shared - x.shared);
-    if (hits.length > 0) related.set(f, hits);
+    if (hits.length > 0) sharing.set(f, hits);
   }
   return {
     unmatchable,
-    related,
+    sharing,
     same: matches.filter((m) => norm(m.approved.description) === norm(m.fresh.description)),
-    reworded: matches.filter((m) => norm(m.approved.description) !== norm(m.fresh.description)),
+    reworded: matches.filter((m) => norm(m.approved.description) !== norm(m.fresh.description) && wordingSimilarity(m.approved.description, m.fresh.description) >= MIN_WORDING_SIMILARITY),
+    related: matches.filter((m) => norm(m.approved.description) !== norm(m.fresh.description) && wordingSimilarity(m.approved.description, m.fresh.description) < MIN_WORDING_SIMILARITY),
     added,
     missing: approved.filter((a) => !usedA.has(a) && a.sources.length > 0),
   };
 }
 
 export function renderRuleDiff(diff: RuleDiff): string {
-  const lines = [`Compared with the approved rules: ${diff.same.length} unchanged, ${diff.reworded.length} reworded, ${diff.added.length} new, ${diff.missing.length} not found again.`];
+  const lines = [`Compared with the approved rules: ${diff.same.length} unchanged, ${diff.reworded.length} reworded, ${diff.related.length} related, ${diff.added.length} new, ${diff.missing.length} not found again.`];
   const section = (title: string, items: string[]) => items.length > 0 && lines.push("", `${title}:`, ...items);
   section(
     "New candidates (a person decides)",
     diff.added.flatMap((r) => [
       `  + ${safeLine(r.description)} (${r.sources.length} comments)`,
-      ...(diff.related.get(r) ?? []).slice(0, 2).map((h) => `      related to approved: ${safeLine(h.approved.description, 120)} (${h.shared} shared comment${h.shared === 1 ? "" : "s"})`),
+      ...(diff.sharing.get(r) ?? []).slice(0, 2).map((h) => `      related to approved: ${safeLine(h.approved.description, 120)} (${h.shared} shared comment${h.shared === 1 ? "" : "s"})`),
     ]),
   );
   section("Reworded (approved text is kept)", diff.reworded.map((m) => `  ~ approved: ${safeLine(m.approved.description)}\n    new run:  ${safeLine(m.fresh.description)}`));
+  section("Related: same evidence, different wording (decide if it is the same rule)", diff.related.map((m) => `  ? approved: ${safeLine(m.approved.description)}\n    new run:  ${safeLine(m.fresh.description)} (${Math.round(m.overlap * 100)}% of comments shared)`));
   section("Approved but not found again (keep unless the team retires it)", diff.missing.map((r) => `  - ${safeLine(r.description)}`));
-  section("Cannot be matched (no source comments)", diff.unmatchable.map((r) => `  ? ${safeLine(r.description)}`));
+  section("Cannot be matched (no source comments)", diff.unmatchable.map((r) => `  ! ${safeLine(r.description)}`));
   return lines.join("\n");
 }

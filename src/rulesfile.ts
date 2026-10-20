@@ -11,6 +11,8 @@ export const RulesFileSchema = z.object({
   repo: z.string(),
   minedAt: z.string(),
   rules: z.array(RuleSchema),
+  /** "approved" for a file written by `precedent approve`: the team's own selection, exported whole. */
+  kind: z.literal("approved").optional(),
   /** Rules the guide states that no review evidence backs (only with `mine --docs`). */
   documentedOnly: z.array(z.object({ description: z.string(), path: z.string(), quote: z.string() })).optional(),
 });
@@ -23,8 +25,9 @@ export async function writeRulesFile(
   rules: Rule[],
   documentedOnly?: RulesFile["documentedOnly"],
   minedAt: string = new Date().toISOString(),
+  kind?: "approved",
 ): Promise<void> {
-  const file: RulesFile = { version: 1, repo, minedAt, rules, ...(documentedOnly ? { documentedOnly } : {}) };
+  const file: RulesFile = { version: 1, repo, minedAt, ...(kind ? { kind } : {}), rules, ...(documentedOnly ? { documentedOnly } : {}) };
   await mkdir(dirname(path), { recursive: true });
   // Atomic: a crash or a full disk never leaves a half-written rules file.
   const tmp = `${path}.${process.pid}.tmp`;

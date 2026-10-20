@@ -72,7 +72,7 @@ describe("cli approve, export and compare with the approved file", () => {
   it("compare uses the approved file by default", () => {
     const res = sh(["compare"]);
     expect(res.status).toBe(0);
-    expect(res.stdout).toContain("Compared with the approved rules: 1 unchanged, 0 reworded, 1 new, 0 not found again");
+    expect(res.stdout).toContain("Compared with the approved rules: 1 unchanged, 0 reworded, 0 related, 1 new, 0 not found again");
   });
 });
 
@@ -157,5 +157,24 @@ describe("hand-written rules, export header, approved export and minedAt", () =>
     const out = join(dir, "cands.json");
     expect(sh(["compare", "--approved", "hand.json", "--rules", "fresh.json", "--out", out]).status).toBe(0);
     expect(JSON.parse(readFileSync(out, "utf8")).minedAt).toBe("2026-03-04T05:06:07Z");
+  });
+});
+
+describe("approve marks its file so export shows everything, wherever it is saved", () => {
+  const cli = resolve("src/cli.ts");
+  const tsx = resolve("node_modules/.bin/tsx");
+  const dir = mkdtempSync(join(tmpdir(), "precedent-kind-"));
+  const sh = (args: string[]) => spawnSync(tsx, [cli, ...args], { cwd: dir, encoding: "utf8", env: { ...process.env, PRECEDENT_ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" } });
+  const thin = { ...rule("rule-1", "Thin but chosen.", 1), confidence: 0.2 };
+
+  it("a file written by approve --to elsewhere is exported whole; a plain rules file is not, unless --all", () => {
+    writeFileSync(join(dir, "cands.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-02-03T00:00:00Z", rules: [thin] }));
+    expect(sh(["approve", "--from", "cands.json", "--to", "team.json", "--id", "rule-1"]).status).toBe(0);
+    const saved = JSON.parse(readFileSync(join(dir, "team.json"), "utf8"));
+    expect(saved.kind).toBe("approved");
+    expect(saved.minedAt).toBe("2026-02-03T00:00:00Z");
+    expect(sh(["export", "--format", "agents", "--rules", "team.json"]).stdout).toContain("Thin but chosen.");
+    expect(sh(["export", "--format", "agents", "--rules", "cands.json"]).stdout).not.toContain("Thin but chosen.");
+    expect(sh(["export", "--format", "agents", "--rules", "cands.json", "--all"]).stdout).toContain("Thin but chosen.");
   });
 });

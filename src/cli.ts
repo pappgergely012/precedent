@@ -268,7 +268,7 @@ async function main(): Promise<void> {
       if (existing && existing.repo !== candidates.repo) fail(`${toPath} is for ${existing.repo} but ${fromPath} is for ${candidates.repo}; refusing to mix them.`);
       const { rules, added, skipped } = approveRules(existing?.rules ?? [], chosen);
       for (const s of skipped) console.log(`skipped: ${safeLine(s.rule.description, 100)} (${safeLine(s.reason, 120)})`);
-      if (added.length > 0) await writeRulesFile(toPath, candidates.repo, rules);
+      if (added.length > 0) await writeRulesFile(toPath, candidates.repo, rules, undefined, existing?.minedAt ?? candidates.minedAt, "approved");
       console.log(`${added.length} rule(s) approved into ${toPath} (${rules.length} in total)${added.length === 0 ? "; nothing written" : ""}. Existing approved rules are never changed.`);
     }
   } else if (command === "compare") {
@@ -304,7 +304,7 @@ async function main(): Promise<void> {
       includeSingleReviewer: values["include-single-reviewer"],
       includeEmerging: values["include-emerging"],
       // A file the team approved is its own selection: export all of it (the cap still applies).
-      all: samePath(rulesPath, APPROVED_RULES_FILE),
+      all: values.all || file.kind === "approved" || samePath(rulesPath, APPROVED_RULES_FILE),
       rulesPath,
     };
     const block = renderBlock(file, exportOptions);
