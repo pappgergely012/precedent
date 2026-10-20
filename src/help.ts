@@ -71,7 +71,7 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
     ],
     about: "Check a pull request (or a local diff) against the mined rules. Prints the findings; only --post posts them.",
     flags: [
-      ["--rules FILE", "rules file (default .precedent/rules.json)"],
+      ["--rules FILE", "rules file (default .precedent/approved.json if it exists, else .precedent/rules.json)"],
       ["--post", "post the findings as one pull request review (needs GITHUB_TOKEN with write access)"],
       ["--dry-run", "print the files, model calls and rough tokens without calling the model"],
       ["--max-files N", "review at most N files (default 100; the ones with the most added lines)"],

@@ -15,6 +15,12 @@ const core = (id: string) => rule(id, ["anna", "bob", "cy"]); // 3 comments, 3 r
 const emerging = (id: string) => rule(id, ["anna", "bob"]); // 2 comments
 
 describe("renderMineOutput", () => {
+  it("prints each rule's id, the one `precedent approve --id` takes, not just a running number", () => {
+    const text = renderMineOutput([core("a")]).join("\n");
+    expect(text).toMatch(/\n1\. Rule a/);
+    expect(text).toMatch(/\n   id [^\s,]+, confidence /);
+  });
+
   it("lists the core rules and only counts the emerging candidates by default", () => {
     const text = renderMineOutput([core("a"), emerging("b"), core("c")]).join("\n");
     expect(text).toContain("2 core rules (3+ comments from 2+ reviewers) and 1 emerging candidates");

@@ -11,7 +11,7 @@ export interface MineOutputOptions {
 function ruleLines(rule: Rule, index: number): string[] {
   const scope = rule.scope.length ? ` (${rule.scope.join(", ")})` : "";
   const flag = isSingleReviewer(rule) ? ", single reviewer" : "";
-  const lines = [`\n${index}. ${rule.description}${scope}`, `   confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`];
+  const lines = [`\n${index}. ${rule.description}${scope}`, `   id ${rule.id}, confidence ${rule.confidence.toFixed(2)}, ${rule.sources.length} comments${flag}:`];
   for (const s of rule.sources.slice(0, 3)) lines.push(`   - #${s.prNumber} @${s.reviewer} ${s.commentUrl}`);
   const ref = rule.docRefs?.[0];
   if (rule.origin === "both" && ref) lines.push(`   documented in ${ref.path}: "${ref.quote.slice(0, 120)}"`);
