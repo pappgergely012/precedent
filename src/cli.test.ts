@@ -149,3 +149,21 @@ describe("cli review --dry-run", () => {
     expect(capped.stdout).toContain("1 model calls (cap --max-files 1)");
   });
 });
+
+describe("cli per-command help", () => {
+  it("prints only that command's usage and flags", () => {
+    const r = run(["mine", "--help"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("precedent mine <owner/repo>");
+    expect(r.stdout).toContain("--redact");
+    expect(r.stdout).toContain("--cache FILE / --no-cache");
+    expect(r.stdout).not.toContain("precedent export");
+    expect(run(["help", "export"]).stdout).toContain("between markers");
+    expect(run(["review", "-h"]).stdout).toContain("only --post posts them");
+  });
+  it("lists every command, and --redact on mine, stability and review, in the overview", () => {
+    const all = run(["--help"]).stdout;
+    for (const c of ["check", "mine", "export", "stability", "review"]) expect(all).toContain(`precedent ${c}`);
+    for (const c of ["mine", "stability", "review"]) expect(all.split("\n").filter((l) => l.includes(`precedent ${c}`)).every((l) => l.includes("--redact"))).toBe(true);
+  });
+});

@@ -15,17 +15,12 @@ import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from ".
 import { ExportError, renderBlock, selectRules, suspiciousRules, writeExport, type ExportFormat } from "./export.js";
 import { describeEstimate, estimateUsage } from "./estimate.js";
 import { renderMineOutput } from "./mineoutput.js";
+import { helpFor } from "./help.js";
 import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
-const USAGE = `Usage:
-  precedent check <owner/repo> [--comments-file FILE]
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all]
-  precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
-  precedent stability <owner/repo> [--runs N] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
-  precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact] [--dry-run] [--max-files N]
-  precedent review --diff FILE [--rules FILE] [--dry-run] [--max-files N]`;
+const USAGE = helpFor();
 
 const DEFAULT_RULES_FILE = ".precedent/rules.json";
 
@@ -79,7 +74,7 @@ if (values.version) {
   process.exit(0);
 }
 if (values.help || command === "help") {
-  console.log(USAGE);
+  console.log(helpFor(command === "help" ? repo : command));
   process.exit(0);
 }
 
