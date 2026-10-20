@@ -8,6 +8,7 @@ import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
 import { formatComment, reviewDiff } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
+import { loadOrFetchComments } from "./snapshot.js";
 import { cachedLlm, describeCache, fileStore } from "./llmcache.js";
 import { extractDocRules, fetchGuideDocs, reconcileRules, type DocRule } from "./docs.js";
 import { ExportError, renderBlock, selectRules, suspiciousRules, writeExport, type ExportFormat } from "./export.js";
@@ -18,9 +19,9 @@ import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
 
 const USAGE = `Usage:
-  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all]
+  precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
-  precedent stability <owner/repo> [--runs N] [--extraction-votes N] [--shared-merge X] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
+  precedent stability <owner/repo> [--runs N] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
   precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
   precedent review --diff FILE [--rules FILE]`;
 
@@ -55,6 +56,7 @@ const OPTIONS = {
   all: { type: "boolean" },
   redact: { type: "boolean" },
   "pre-merge": { type: "boolean" },
+  "comments-file": { type: "string" },
   "extraction-votes": { type: "string" },
   "shared-merge": { type: "string" },
   "dry-run": { type: "boolean" },
@@ -120,10 +122,12 @@ async function main(): Promise<void> {
     if (!process.env.GITHUB_TOKEN) {
       console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour and mining a large repository will hit the limit.");
     }
-    const comments = await fetchReviewComments(repo, {
-      token: process.env.GITHUB_TOKEN,
-      maxPages: intFlag("max-pages", 30),
-    });
+    const comments = await loadOrFetchComments(
+      values["comments-file"],
+      repo,
+      () => fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) }),
+      progress,
+    );
     const prs = new Set(comments.map((c) => c.prNumber));
     console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
     const mask = redactor();
@@ -234,7 +238,7 @@ async function main(): Promise<void> {
     requireAnthropicKey();
     const runs = intFlag("runs", 3);
     const top = intFlag("top", 10);
-    const comments = await fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) });
+    const comments = await loadOrFetchComments(values["comments-file"], repo, () => fetchReviewComments(repo, { token: process.env.GITHUB_TOKEN, maxPages: intFlag("max-pages", 30) }), progress);
     console.log(`Fetched ${comments.length} review comments once; mining ${runs} times (each run costs about as much as one \`mine\`).`);
     const stabilityMask = redactor();
     const sendableComments = values.redact ? comments.map((c) => ({ ...c, body: stabilityMask.text(c.body) })) : comments;
