@@ -121,3 +121,19 @@ describe("replay correctness (validator's checks)", () => {
     expect(Object.keys(store.entries())).toHaveLength(2);
   });
 });
+
+describe("cachedLlm with saveEachCall", () => {
+  it("writes every new answer to the store as it arrives, so a failure later does not lose it", async () => {
+    const saved: number[] = [];
+    const memory = memoryStore();
+    const store = { get: memory.get, set: memory.set, save: async () => void saved.push(Object.keys(memory.entries()).length) };
+    let n = 0;
+    const inner = { parse: async (_p: string, schema: { parse: (v: unknown) => unknown }) => { if (++n === 3) throw new Error("terminated"); return schema.parse({ ok: true }); } } as never;
+    const llm = cachedLlm(inner, store, "m", undefined, { saveEachCall: true });
+    const schema = z.object({ ok: z.boolean() });
+    await llm.parse("one", schema);
+    await llm.parse("two", schema);
+    await expect(llm.parse("three", schema)).rejects.toThrow("terminated");
+    expect(saved).toEqual([1, 2]);
+  });
+});

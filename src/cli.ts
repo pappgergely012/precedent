@@ -188,10 +188,12 @@ async function main(): Promise<void> {
     const cachePath = values["no-cache"] ? undefined : values.cache;
     const model = process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
     // With --cache, every model answer (extraction, merge, audit, dedupe, --docs) is kept next to the principle cache.
-    const llm = cachePath ? cachedLlm(anthropicLlm(), await fileStore(`${cachePath}.responses.json`), model) : anthropicLlm();
+    const llm = cachePath ? cachedLlm(anthropicLlm(), await fileStore(`${cachePath}.responses.json`), model, undefined, { saveEachCall: true }) : anthropicLlm();
     // --reuse-extractions: only the per-comment judgements come from the file; merge, audit and dedupe always call the model.
     const reusePath = values["reuse-extractions"];
     const mineCache = cachePath || reusePath ? await fileCache((cachePath ?? reusePath)!, model) : undefined;
+    if (mineCache?.note) console.warn(`Notice: ${mineCache.note}`);
+    if (cachePath || reusePath) setResumeFile((cachePath ?? reusePath)!);
     let rules = await extractRules(sendable, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
@@ -455,9 +457,21 @@ async function main(): Promise<void> {
   }
 }
 
+let resumeFile: string | undefined;
+const resumeHint = () => `Progress so far is saved in ${resumeFile}; run the same command again to resume without paying again for the batches that finished.`;
+/** With a cache file, finished batches are written to it as they complete; say so when a run is cut short. */
+function setResumeFile(path: string): void {
+  resumeFile = path;
+  process.once("SIGINT", () => {
+    console.error(`\nInterrupted. ${resumeHint()}`);
+    process.exit(130);
+  });
+}
+
 /** One-line message for the user; the stack trace is only shown when debugging. */
 function reportError(error: unknown): never {
   console.error(describeError(error));
+  if (resumeFile) console.error(resumeHint());
   if (process.env.PRECEDENT_DEBUG && error instanceof Error && error.stack) console.error(error.stack);
   process.exit(1);
 }

@@ -446,10 +446,17 @@ interface RunStats {
 async function mapPool<T, R>(items: T[], limit: number, task: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
+  let failed = false;
   const worker = async () => {
-    while (next < items.length) {
+    // After one task fails no worker starts another: a dying run must not keep calling (and paying for) the model.
+    while (next < items.length && !failed) {
       const index = next++;
-      results[index] = await task(items[index]!, index);
+      try {
+        results[index] = await task(items[index]!, index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -551,13 +558,12 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   const batchList = Array.from({ length: Math.ceil(pending.length / batchSize) }, (_, i) => pending.slice(i * batchSize, (i + 1) * batchSize));
   log(`Analysing ${pending.length} of ${comments.length} comments in ${batchList.length} batches${votes > 1 ? `, each asked ${votes} times` : ""}`);
   let done = 0;
+  // Saves are written one at a time, after every finished batch: a run that dies keeps the batches it already paid for.
+  let writing: Promise<void> = Promise.resolve();
   const outputs = await mapPool(batchList, concurrency, async (batch) => {
     const outs = await Promise.all(Array.from({ length: votes }, () => llm.parse(principlesPrompt(batch), PrinciplesSchema)));
-    log(`Batch ${++done}/${batchList.length} done`);
-    return { batch, outs };
-  });
-  for (const { batch, outs } of outputs) {
     const answers = outs.map((out) => new Map(out.items.map((item) => [item.id, item.principle])));
+    const judgements: { c: ReviewComment; principle: string | null }[] = [];
     for (const c of batch) {
       // A comment no answer covered is not cached: it was not judged, so ask again next time.
       const judged = answers.filter((a) => a.has(c.id));
@@ -566,9 +572,16 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
       const yes = judged.map((a) => a.get(c.id)).filter((p): p is string => !!p);
       const principle = yes.length >= majority(judged.length) ? yes[0]! : null;
       cache?.set(c.id, cacheText(c, votes), principle);
-      if (principle) candidates.push({ id: c.id, principle });
+      judgements.push({ c, principle });
     }
-  }
+    if (cache) {
+      writing = writing.then(() => cache.save());
+      await writing;
+    }
+    log(`Batch ${++done}/${batchList.length} done`);
+    return judgements;
+  });
+  for (const judgements of outputs) for (const { c, principle } of judgements) if (principle) candidates.push({ id: c.id, principle });
   await cache?.save();
   stats.candidates = candidates.length;
   log(`${candidates.length} candidate rules found`);

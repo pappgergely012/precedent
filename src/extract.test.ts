@@ -537,3 +537,74 @@ describe("reusing per-comment extractions from a file (--reuse-extractions)", ()
   });
 });
 
+
+describe("an interrupted run keeps what it already paid for", () => {
+  const ids = Array.from({ length: 10 }, (_, i) => i + 1);
+  const principle = (id: number) => ({ id, principle: "Add a rate limit to new endpoints" });
+  const extractionAnswer = (prompt: string) => ({ items: [...prompt.matchAll(/^\[(\d+)\] file:/gm)].map((m) => principle(Number(m[1]))) });
+  const rest = [
+    { rules: [{ description: "Add a rate limit to new endpoints", scope: [], commentIds: ids }] },
+    { rules: [{ index: 0, supportingIds: ids, revisedDescription: null }] },
+    { groups: [] },
+  ];
+
+  /** A model that answers extraction prompts and dies on the (dieAfter + 1)-th one; counts what it was asked. */
+  const flaky = (dieAfter: number) => {
+    let extractions = 0;
+    let later = 0;
+    const llm = {
+      parse: async (prompt: string, schema: { parse: (v: unknown) => unknown }) => {
+        if (prompt.includes("analyse code review comments")) {
+          if (extractions >= dieAfter) throw new Error("terminated");
+          extractions++;
+          return schema.parse(extractionAnswer(prompt));
+        }
+        return schema.parse(rest[later++]);
+      },
+    } as unknown as Llm;
+    return { llm, extractions: () => extractions };
+  };
+
+  it("writes each finished batch to the cache file, so a re-run only asks about the batches that were lost", async () => {
+    const { mkdtempSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { fileCache } = await import("./cache.js");
+    const file = join(mkdtempSync(join(tmpdir(), "precedent-resume-")), "c.json");
+    const comments = ids.map((id) => comment(id));
+
+    // 10 comments in batches of 2 = 5 batches, one at a time; the model dies on the 3rd.
+    const first = flaky(2);
+    await expect(extractRules(comments, first.llm, { batchSize: 2, concurrency: 1, cache: await fileCache(file, "m") })).rejects.toThrow("terminated");
+    expect(first.extractions()).toBe(2);
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    expect(Object.keys(saved.entries)).toHaveLength(4); // two finished batches of two comments, on disk before the failure surfaced
+    expect(saved.meta).toEqual({ promptVersion: "1", model: "m" });
+
+    // re-run with a healthy model: only the 3 lost batches are asked
+    const second = flaky(99);
+    const resumed = await extractRules(comments, second.llm, { batchSize: 2, concurrency: 1, cache: await fileCache(file, "m") });
+    expect(second.extractions()).toBe(3);
+    expect(resumed.length).toBe(1);
+  });
+
+  it("stops starting new batches after a failure", async () => {
+    const calls = flaky(1);
+    await expect(extractRules(ids.map((id) => comment(id)), calls.llm, { batchSize: 1, concurrency: 1 })).rejects.toThrow("terminated");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.extractions()).toBe(1); // no further extraction calls were made after the failure
+  });
+
+  it("warns instead of silently re-paying when the file was made by another model or prompt version", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { fileCache } = await import("./cache.js");
+    const file = join(mkdtempSync(join(tmpdir(), "precedent-note-")), "c.json");
+    const one = await fileCache(file, "model-a");
+    one.set(1, cacheText(comment(1), 1), "Some rule");
+    await one.save();
+    expect((await fileCache(file, "model-a")).note).toBeUndefined();
+    expect((await fileCache(file, "model-b")).note).toContain("none of its answers will be reused");
+  });
+});

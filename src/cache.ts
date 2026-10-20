@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 
@@ -20,6 +20,8 @@ export interface PrincipleCache {
   save(): Promise<void>;
   /** How many lookups found an answer (a run that uses the cache is not a fresh run). */
   hits(): number;
+  /** Set when the file was made by another model or prompt version: its answers will not be reused. */
+  note?: string;
 }
 
 const keyOf = (text: string, model: string) =>
@@ -27,10 +29,11 @@ const keyOf = (text: string, model: string) =>
 
 const FileSchema = z.object({
   version: z.literal(1),
+  meta: z.object({ promptVersion: z.string(), model: z.string() }).optional(),
   entries: z.record(z.string(), z.object({ k: z.string(), p: z.string().nullable() })),
 });
 
-function build(model: string, entries: Map<number, { k: string; p: string | null }>, save: () => Promise<void>): PrincipleCache {
+function build(model: string, entries: Map<number, { k: string; p: string | null }>, save: () => Promise<void>, note?: string): PrincipleCache {
   let hitCount = 0;
   return {
     get(id, text) {
@@ -44,6 +47,7 @@ function build(model: string, entries: Map<number, { k: string; p: string | null
       entries.set(id, { k: keyOf(text, model), p: principle });
     },
     save,
+    note,
   };
 }
 
@@ -54,15 +58,27 @@ export function memoryCache(model = "test"): PrincipleCache {
 /** A cache stored as JSON at `path`. A missing, unreadable or outdated file is an empty cache. */
 export async function fileCache(path: string, model: string): Promise<PrincipleCache> {
   const entries = new Map<number, { k: string; p: string | null }>();
+  let note: string | undefined;
   try {
     const file = FileSchema.parse(JSON.parse(await readFile(path, "utf8")));
     for (const [id, entry] of Object.entries(file.entries)) entries.set(Number(id), entry);
+    if (file.meta && (file.meta.model !== model || file.meta.promptVersion !== PROMPT_VERSION)) {
+      note = `${path} was made with model ${file.meta.model} and prompt version ${file.meta.promptVersion}; this run uses ${model} and ${PROMPT_VERSION}, so none of its answers will be reused (they are replaced as comments are judged again). Use another file name to keep the old one.`;
+    }
   } catch {
     // Start empty: a cache is only ever an optimisation.
   }
-  return build(model, entries, async () => {
-    await mkdir(dirname(path), { recursive: true });
-    const file = { version: 1 as const, entries: Object.fromEntries(entries) };
-    await writeFile(path, `${JSON.stringify(file)}\n`);
-  });
+  return build(
+    model,
+    entries,
+    async () => {
+      await mkdir(dirname(path), { recursive: true });
+      const file = { version: 1 as const, meta: { promptVersion: PROMPT_VERSION, model }, entries: Object.fromEntries(entries) };
+      // Atomic: an interrupted write never leaves a half-written file that would throw the saved answers away.
+      const tmp = `${path}.${process.pid}.tmp`;
+      await writeFile(tmp, `${JSON.stringify(file)}\n`);
+      await rename(tmp, path);
+    },
+    note,
+  );
 }
