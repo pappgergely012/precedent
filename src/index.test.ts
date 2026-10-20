@@ -7,7 +7,7 @@ describe("library surface", () => {
       [
         "CORE_MIN_COMMENTS", "CORE_MIN_REVIEWERS", "DEFAULT_MODEL", "ExportError", "GitHubApiError", "RuleSchema", "RulesFileSchema",
         "anthropicLlm", "applyBlock", "cachedLlm", "compareRuns", "createRedactor", "describeCache", "describeEstimate", "describeRedaction",
-        "estimateUsage", "extractRules", "fetchPullDiff", "fetchReviewComments", "fileCache", "fileStore", "filterComments", "formatComment",
+        "describeFit", "estimateUsage", "extractRules", "fetchPullDiff", "fetchReviewComments", "fileCache", "fileStore", "filterComments", "fitMetrics", "fitTier", "formatComment",
         "isCoreRule", "memoryCache", "memoryStore", "postPullReview", "readRulesFile", "redactText", "renderBlock", "renderMineOutput",
         "replayLlm", "reviewDiff", "ruleTier", "rulesForFile", "selectRules", "selectUsable", "stabilityCuts", "summarizeStability",
         "suspiciousRules", "verifyRules", "withRetry", "writeExport", "writeRulesFile",
