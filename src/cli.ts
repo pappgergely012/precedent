@@ -36,6 +36,8 @@ function parseCli() {
   }
 }
 const OPTIONS = {
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
   out: { type: "string" },
   rules: { type: "string" },
   diff: { type: "string" },
@@ -67,6 +69,16 @@ const OPTIONS = {
 } as const;
 const { positionals, values } = parseCli();
 const [command, repo, prArg] = positionals;
+
+if (values.version) {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  console.log(pkg.version);
+  process.exit(0);
+}
+if (values.help || command === "help") {
+  console.log(USAGE);
+  process.exit(0);
+}
 
 function fail(message: string): never {
   console.error(message);
@@ -287,7 +299,10 @@ async function main(): Promise<void> {
       fail("--post needs a pull request and GITHUB_TOKEN with permission to write pull request reviews.");
     }
 
-    const { rules } = await readRulesFile(values.rules ?? DEFAULT_RULES_FILE);
+    const reviewRulesPath = values.rules ?? DEFAULT_RULES_FILE;
+    const { rules } = await readRulesFile(reviewRulesPath).catch((error: NodeJS.ErrnoException) =>
+      fail(error.code === "ENOENT" ? `Rules file ${reviewRulesPath} not found. Run "precedent mine owner/repo --out ${reviewRulesPath}" first.` : `Cannot read ${reviewRulesPath}: ${error.message.split("\n")[0]}`),
+    );
     const diffText = values.diff ? await readFile(values.diff, "utf8") : await fetchPullDiff(repo!, prNumber, { token });
     const diffMask = redactor();
     const files = parseDiff(diffText).map((f) => ({ ...f, patch: diffMask.text(f.patch) }));
