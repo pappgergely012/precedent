@@ -118,6 +118,18 @@ describe("cli help, version and early validation", () => {
   });
 });
 
+describe("cli review with a missing diff file", () => {
+  it("says so in one line instead of printing ENOENT", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const rules = join(dir, "rules.json");
+    writeFileSync(rules, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-19T00:00:00.000Z", rules: [] }));
+    const r = run(["review", "--diff", "/nonexistent/pr.diff", "--rules", rules]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("Diff file /nonexistent/pr.diff not found.");
+    expect(r.stderr).not.toContain("ENOENT");
+  });
+});
+
 describe("cli review --dry-run", () => {
   it("estimates the calls for a local diff without an API key or a model call, and honours --max-files", () => {
     const dir = mkdtempSync(join(tmpdir(), "precedent-"));
@@ -131,8 +143,27 @@ describe("cli review --dry-run", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("Reviewing 3 changed files");
     expect(r.stdout).toContain("2 of 3 files have an applicable rule; 2 model calls");
+    expect(r.stdout).toMatch(/\d+ input and \d+ output tokens/);
     expect(r.stdout).toContain("No model call was made.");
     const capped = run(["review", "--diff", diff, "--rules", rules, "--dry-run", "--max-files", "1"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
     expect(capped.stdout).toContain("1 model calls (cap --max-files 1)");
+  });
+});
+
+describe("cli per-command help", () => {
+  it("prints only that command's usage and flags", () => {
+    const r = run(["mine", "--help"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("precedent mine <owner/repo>");
+    expect(r.stdout).toContain("--redact");
+    expect(r.stdout).toContain("--cache FILE / --no-cache");
+    expect(r.stdout).not.toContain("precedent export");
+    expect(run(["help", "export"]).stdout).toContain("between markers");
+    expect(run(["review", "-h"]).stdout).toContain("only --post posts them");
+  });
+  it("lists every command, and --redact on mine, stability and review, in the overview", () => {
+    const all = run(["--help"]).stdout;
+    for (const c of ["check", "mine", "export", "stability", "review"]) expect(all).toContain(`precedent ${c}`);
+    for (const c of ["mine", "stability", "review"]) expect(all.split("\n").filter((l) => l.includes(`precedent ${c}`)).every((l) => l.includes("--redact"))).toBe(true);
   });
 });

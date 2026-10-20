@@ -39,6 +39,9 @@ export function fitMetrics(comments: ReviewComment[]): FitMetrics {
   };
 }
 
+/** The fetch stops at this many comments, so a count at the cap is a lower bound. */
+export const COMMENT_CAP = 1000;
+
 const LIKELY = { comments: 300, reviewersGe3: 8, topShare: 0.35, prsMultiReviewer: 30 };
 const POSSIBLE = { comments: 100, reviewersGe3: 3, topShare: 0.6, prsMultiReviewer: 10 };
 
@@ -63,7 +66,7 @@ function shortfalls(m: FitMetrics, t: typeof LIKELY): string[] {
 
 const WORDING: Record<FitTier, string> = {
   likely: "Core rules are likely: enough inline review history from enough different reviewers.",
-  possible: "Core rules are possible, but the history is thin or dominated by few reviewers.",
+  possible: "Core rules are possible, but this check is lenient: \"possible\" often means few or none, because the history is thin or dominated by few reviewers.",
   unlikely: "Core rules are unlikely: too little inline review history for rules to recur across reviewers.",
 };
 
@@ -71,13 +74,14 @@ const WORDING: Record<FitTier, string> = {
 export function describeFit(repo: string, m: FitMetrics, window: string): string[] {
   const tier = fitTier(m);
   const lines = [
-    `${repo}: ${m.comments} inline review comments from ${m.reviewers} reviewers (${m.reviewersGe3} with 3+ comments) on ${m.prs} pull requests ${window}; the most active reviewer wrote ${Math.round(m.topShare * 100)}% of them.`,
+    `${repo}: ${m.comments >= COMMENT_CAP ? `${COMMENT_CAP.toLocaleString("en-US")}+` : m.comments} inline review comments from ${m.reviewers} reviewers (${m.reviewersGe3} with 3+ comments) on ${m.prs} pull requests ${window}; the most active reviewer wrote ${Math.round(m.topShare * 100)}% of them.`,
     WORDING[tier],
   ];
   if (tier !== "likely") {
     const gaps = shortfalls(m, tier === "possible" ? LIKELY : POSSIBLE);
     if (gaps.length > 0) lines.push(`For ${tier === "possible" ? "\"likely\"" : "\"possible\""}: ${gaps.join("; ")}.`);
   }
+  if (m.comments >= COMMENT_CAP) lines.push(`The count is capped at ${COMMENT_CAP.toLocaleString("en-US")} comments, so the repository has at least that many.`);
   if (m.comments === 0) lines.push("No inline review comments: teams that review in the pull request conversation, in review summaries or in a chat tool leave nothing for `mine` to read.");
   lines.push("A heuristic on counts only (no comment text is read, no model is called). It agreed with the number of core rules actually found on 8 of 11 repositories; it is lenient, so \"possible\" often means few or none. Only inline review comments count, and private repositories are not measured.");
   return lines;
