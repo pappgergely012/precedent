@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FileDiff } from "./diff.js";
+import { cleanText, SAFE_URL } from "./export.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
 
@@ -21,8 +22,31 @@ const FindingsSchema = z.object({
   findings: z.array(z.object({ ruleId: z.string(), line: z.number(), message: z.string() })),
 });
 
-/** Match a path against a glob where `**` crosses directories and `*` does not. */
-export function matchesGlob(glob: string, path: string): boolean {
+/** Expand `{a,b}` alternatives (also nested) into plain globs. */
+export function expandBraces(glob: string): string[] {
+  const open = glob.indexOf("{");
+  if (open === -1) return [glob];
+  let depth = 0;
+  const cuts: number[] = [];
+  for (let i = open; i < glob.length; i++) {
+    if (glob[i] === "{") depth++;
+    else if (glob[i] === "}" && --depth === 0) {
+      cuts.push(i);
+      break;
+    } else if (glob[i] === "," && depth === 1) cuts.push(i);
+  }
+  const close = cuts[cuts.length - 1];
+  if (close === undefined || glob[close] !== "}") return [glob];
+  const parts: string[] = [];
+  let from = open + 1;
+  for (const cut of cuts) {
+    parts.push(glob.slice(from, cut));
+    from = cut + 1;
+  }
+  return parts.flatMap((part) => expandBraces(glob.slice(0, open) + part + glob.slice(close + 1)));
+}
+
+function globToRegExp(glob: string): RegExp {
   const pattern = glob
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*\*\//g, "\u0000")
@@ -31,7 +55,17 @@ export function matchesGlob(glob: string, path: string): boolean {
     .replace(/\?/g, "[^/]")
     .replace(/\u0000/g, "(?:.*/)?")
     .replace(/\u0001/g, ".*");
-  return new RegExp(`^${pattern}$`).test(path);
+  return new RegExp(`^${pattern}$`);
+}
+
+/**
+ * Match a path against a glob where `**` crosses directories and `*` does not. `{a,b}` alternatives are
+ * supported, and a leading `./` or `/` on the glob (or the path) is ignored.
+ */
+export function matchesGlob(glob: string, path: string): boolean {
+  const clean = (text: string) => text.replace(/^(?:\.\/|\/)+/, "");
+  const target = clean(path);
+  return expandBraces(clean(glob)).some((g) => globToRegExp(g).test(target));
 }
 
 export function rulesForFile(rules: Rule[], path: string): Rule[] {
@@ -86,8 +120,29 @@ export async function reviewDiff(
     .filter((v) => (seen.has(v.ruleId) ? false : (seen.add(v.ruleId), true)));
 }
 
+const MENTION = /(^|[^\w`])@(?=[A-Za-z0-9_])([A-Za-z0-9_/-]+)/g;
+const LINK = /\[([^\]]*)\]\((?:[^)]*)\)/g;
+const BARE_URL = /\b(?:https?|ftp|javascript|data):[^\s)>\]]*/gi;
+
+/**
+ * Text that reaches a public pull request comment from the rule or the model. Rule text comes from review
+ * comments and the model's message comes from a model that reads a diff the PR author controls, so both are
+ * untrusted: export's cleaner (control and bidi characters, `<`, fences, images, length), plus no links and no
+ * mentions (a mention notifies people, a link or image sends the reader or their client to a third party).
+ */
+export function sanitizeCommentText(text: string, maxChars: number): string {
+  const unlinked = text.replace(LINK, "$1").replace(BARE_URL, "[link removed]");
+  return cleanText(unlinked, maxChars).replace(MENTION, (_m, before: string, name: string) => `${before}\`@${name}\``);
+}
+
 /** The text of one inline comment: what to change, which rule, and where the team asked for it before. */
 export function formatComment(violation: Violation, rule: Rule): string {
-  const evidence = rule.sources.slice(0, 2).map((s) => `[#${s.prNumber}](${s.commentUrl})`).join(", ");
-  return `${violation.message}\n\n**Team rule:** ${rule.description}\n\nReviewers asked for this before in ${evidence} (${rule.sources.length} comments in total).`;
+  const seen = new Set<number>();
+  const evidence = rule.sources
+    .filter((s) => SAFE_URL.test(s.commentUrl) && !seen.has(s.prNumber) && seen.add(s.prNumber))
+    .slice(0, 2)
+    .map((s) => `[#${s.prNumber}](${s.commentUrl})`)
+    .join(", ");
+  const why = evidence ? `Reviewers asked for this before in ${evidence} (${rule.sources.length} comments in total).` : `${rule.sources.length} earlier review comments asked for this.`;
+  return `${sanitizeCommentText(violation.message, 300)}\n\n**Team rule:** ${sanitizeCommentText(rule.description, 500)}\n\n${why}`;
 }

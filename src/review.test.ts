@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDiff } from "./diff.js";
 import type { Llm } from "./llm.js";
 import type { Rule } from "./rule.js";
-import { formatComment, matchesGlob, reviewDiff, rulesForFile } from "./review.js";
+import { formatComment, matchesGlob, reviewDiff, rulesForFile, sanitizeCommentText } from "./review.js";
 
 const diff = `diff --git a/src/api.ts b/src/api.ts
 index 111..222 100644
@@ -90,5 +90,78 @@ describe("formatComment", () => {
     expect(body).toContain("Inline this.");
     expect(body).toContain("Rule a");
     expect(body).toContain("[#7](https://github.com/o/r/pull/7#discussion_r1)");
+  });
+});
+
+describe("matchesGlob: braces and leading separators", () => {
+  it("supports brace alternatives, also nested and with ** and a prefix", () => {
+    expect(matchesGlob("src/**/*.{ts,tsx}", "src/a/b/c.tsx")).toBe(true);
+    expect(matchesGlob("src/**/*.{ts,tsx}", "src/a/b/c.js")).toBe(false);
+    expect(matchesGlob("{src,lib}/**", "lib/x/y.ts")).toBe(true);
+    expect(matchesGlob("src/{a,b/{c,d}}/*.ts", "src/b/d/x.ts")).toBe(true);
+    expect(matchesGlob("src/{a,b/{c,d}}/*.ts", "src/b/e/x.ts")).toBe(false);
+  });
+  it("ignores a leading ./ or / on the glob and the path, and keeps literal braces without a closing one", () => {
+    expect(matchesGlob("./src/**", "src/a.ts")).toBe(true);
+    expect(matchesGlob("/src/**", "src/a.ts")).toBe(true);
+    expect(matchesGlob("src/**", "./src/a.ts")).toBe(true);
+    expect(matchesGlob("a{b", "a{b")).toBe(true);
+  });
+});
+
+describe("sanitizeCommentText and formatComment", () => {
+  const rule = {
+    id: "r1", description: "Use gate() in tests. @everyone see ![x](http://evil.example/p.png) [click](javascript:alert(1)) <script>x</script> https://evil.example/a",
+    scope: [], confidence: 0.8,
+    sources: [
+      { prNumber: 1, reviewer: "a", commentUrl: "https://github.com/o/r/pull/1#discussion_r1" },
+      { prNumber: 2, reviewer: "b", commentUrl: "https://x.example/) [bad](http://evil" },
+      { prNumber: 3, reviewer: "c", commentUrl: "https://github.com/o/r/pull/3#discussion_r3" },
+    ],
+  };
+
+  it("removes images, links, raw URLs, HTML and bidi characters, and defuses mentions", () => {
+    const text = sanitizeCommentText("Ping @octocat and @org/team now ‮evil ![i](http://e/x.png) [t](http://e) http://e.example <b>x</b>", 300);
+    expect(text).not.toMatch(/http|!\[|<b>|‮/);
+    expect(text).toContain("`@octocat`");
+    expect(text).toContain("`@org/team`");
+  });
+
+  it("caps long text and leaves ordinary text alone", () => {
+    expect(sanitizeCommentText("Use `gate()` in tests, not `jest.fn()`.", 300)).toBe("Use `gate()` in tests, not `jest.fn()`.");
+    expect(sanitizeCommentText("x".repeat(1000), 300).length).toBeLessThanOrEqual(300);
+  });
+
+  it("builds the posted comment only from cleaned text and safe citation links", () => {
+    const body = formatComment({ ruleId: "r1", path: "a.ts", line: 1, message: "Call @maintainer, see http://evil.example/steal ![p](http://evil/p.png)" }, rule as never);
+    expect(body).not.toMatch(/evil|<script>|javascript:|!\[/);
+    expect(body).not.toMatch(/(^|[^`\w])@\w/);
+    expect(body).toContain("[#1](https://github.com/o/r/pull/1#discussion_r1)");
+    expect(body).toContain("[#3](https://github.com/o/r/pull/3#discussion_r3)");
+  });
+});
+
+describe("parseDiff paths", () => {
+  const one = (header: string, eol = "\n") =>
+    parseDiff(["diff --git a/x b/x", "index 1..2 100644", "--- a/x", header, "@@ -1,1 +1,2 @@", " keep", "+added", ""].join(eol));
+
+  it("drops the tab git adds after a path with spaces", () => {
+    expect(one("+++ b/my file.ts\t")[0]!.path).toBe("my file.ts");
+    expect(one("+++ b/dir/with space/a b.ts\t2026-01-01 00:00:00")[0]!.path).toBe("dir/with space/a b.ts");
+  });
+  it("decodes git's quoted paths: octal UTF-8 bytes, escaped quotes and tabs", () => {
+    expect(one('+++ "b/caf\\303\\251.ts"')[0]!.path).toBe("café.ts");
+    expect(one('+++ "b/\\346\\227\\245\\346\\234\\254.ts"')[0]!.path).toBe("日本.ts");
+    expect(one('+++ "b/say \\"hi\\".ts"')[0]!.path).toBe('say "hi".ts');
+    expect(one('+++ "b/a\\tb.ts"')[0]!.path).toBe("a\tb.ts");
+  });
+  it("handles CRLF diffs: no carriage return on paths, and line numbers still right", () => {
+    const files = one("+++ b/c.ts", "\r\n");
+    expect(files[0]!.path).toBe("c.ts");
+    expect([...files[0]!.addedLines]).toEqual([2]);
+  });
+  it("keeps ordinary paths, renames and deleted files working", () => {
+    expect(one("+++ b/src/a.ts")[0]!.path).toBe("src/a.ts");
+    expect(one("+++ /dev/null")).toEqual([]);
   });
 });
