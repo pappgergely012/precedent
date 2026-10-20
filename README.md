@@ -149,7 +149,7 @@ jobs:
           add-paths: .precedent/rules.json
 ```
 
-A ready-to-copy workflow for teams that already approved rules (job summary or one pull request comment, cost cap, fail-open, fork-safe) is in `examples/github-action/` with notes in `docs/github-action-recipe.md`. It has not been security-reviewed yet.
+A ready-to-copy workflow for teams that already approved rules (job summary or one pull request comment, cost cap, fail-open, fork-safe) is in `examples/github-action/` with notes in `docs/github-action-recipe.md`. Its first security review found two blocking problems that are fixed; it needs a re-check before a partner uses it, and it has not been run on GitHub by its author.
 
 ## Planned
 

@@ -18,3 +18,11 @@ export function safeLine(text: string, max = 200): string {
   out = out.replace(/ {2,}/g, " ").trim();
   return out.length > max ? `${out.slice(0, max - 1)}…` : out;
 }
+
+/**
+ * A file path (chosen by whoever wrote the pull request) as an inline code span that cannot end early or become a link:
+ * one line, no control characters, and no backticks, brackets, parentheses or angle brackets.
+ */
+export function codeSpan(text: string, max = 200): string {
+  return `\`${safeLine(text, max).replace(/[`\[\]()<>]/g, "_")}\``;
+}
