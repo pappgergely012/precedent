@@ -20,6 +20,7 @@ import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, samePath, writeRulesFile } from "./rulesfile.js";
 import { safeLine } from "./terminal.js";
+import { describeError } from "./errors.js";
 import { ruleTier } from "./rule.js";
 import { diffRules, renderRuleDiff } from "./rulediff.js";
 import { approveRules, selectCandidates } from "./approve.js";
@@ -437,8 +438,7 @@ async function main(): Promise<void> {
 
 /** One-line message for the user; the stack trace is only shown when debugging. */
 function reportError(error: unknown): never {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Error: ${message.split("\n")[0]}`);
+  console.error(describeError(error));
   if (process.env.PRECEDENT_DEBUG && error instanceof Error && error.stack) console.error(error.stack);
   process.exit(1);
 }
