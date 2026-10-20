@@ -48,7 +48,8 @@ export function samePath(a: string, b: string): boolean {
 }
 
 export async function readRulesFile(path: string): Promise<RulesFile> {
-  const text = await readFile(path, "utf8");
+  const raw = await readFile(path, "utf8");
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw; // a UTF-8 byte order mark from an editor is not content
   let json: unknown;
   try {
     json = JSON.parse(text);
