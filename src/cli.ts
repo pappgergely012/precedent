@@ -20,7 +20,7 @@ import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, samePath, writeRulesFile } from "./rulesfile.js";
 import { codeSpan, safeLine } from "./terminal.js";
-import { describeError } from "./errors.js";
+import { describeError, describeResume } from "./errors.js";
 import { ruleTier } from "./rule.js";
 import { diffRules, renderRuleDiff } from "./rulediff.js";
 import { approveRules, selectCandidates } from "./approve.js";
@@ -163,6 +163,7 @@ async function main(): Promise<void> {
     if (!process.env.GITHUB_TOKEN) {
       console.warn("Warning: GITHUB_TOKEN is not set. Unauthenticated requests are limited to 60 per hour and mining a large repository will hit the limit.");
     }
+    const snapshotExisted = !!values["comments-file"] && existsSync(values["comments-file"]);
     const comments = await loadOrFetchComments(
       values["comments-file"],
       repo,
@@ -170,7 +171,8 @@ async function main(): Promise<void> {
       progress,
     );
     const prs = new Set(comments.map((c) => c.prNumber));
-    console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
+    // With an existing snapshot GitHub was not contacted and the line above already says how many comments are used.
+    if (!snapshotExisted) console.log(`Fetched ${comments.length} review comments from ${prs.size} pull requests in ${repo}.`);
     const mask = redactor();
     const sendable = values.redact ? comments.map((c) => ({ ...c, body: mask.text(c.body) })) : comments;
     mask.report();
@@ -178,6 +180,7 @@ async function main(): Promise<void> {
       const usable = selectUsable(comments, { maxComments: intFlag("max-comments", 1000), maxAgeDays: intFlag("max-age-days", 730) });
       const cacheFile = values.cache ?? values["reuse-extractions"];
       const cache = cacheFile ? await fileCache(cacheFile, process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL) : undefined;
+      if (cache?.note) console.warn(`Notice: ${cache.note}`);
       const votes = intFlag("extraction-votes", 1);
       const pending = cache ? usable.filter((c) => cache.get(c.id, cacheText(c, votes)) === undefined).length : usable.length;
       for (const line of describeEstimate(estimateUsage({ usable: usable.length, pending, votes }), usable.length, votes)) console.log(line);
@@ -188,12 +191,21 @@ async function main(): Promise<void> {
     const cachePath = values["no-cache"] ? undefined : values.cache;
     const model = process.env.PRECEDENT_MODEL ?? DEFAULT_MODEL;
     // With --cache, every model answer (extraction, merge, audit, dedupe, --docs) is kept next to the principle cache.
-    const llm = cachePath ? cachedLlm(anthropicLlm(), await fileStore(`${cachePath}.responses.json`), model, undefined, { saveEachCall: true }) : anthropicLlm();
+    const responseStore = cachePath ? await fileStore(`${cachePath}.responses.json`) : undefined;
+    if (responseStore?.note) console.warn(`Notice: ${responseStore.note}`);
+    const llm = responseStore ? cachedLlm(anthropicLlm(), responseStore, model, undefined, { saveEachCall: true }) : anthropicLlm();
     // --reuse-extractions: only the per-comment judgements come from the file; merge, audit and dedupe always call the model.
     const reusePath = values["reuse-extractions"];
     const mineCache = cachePath || reusePath ? await fileCache((cachePath ?? reusePath)!, model) : undefined;
     if (mineCache?.note) console.warn(`Notice: ${mineCache.note}`);
-    if (cachePath || reusePath) setResumeFile((cachePath ?? reusePath)!);
+    if (cachePath || reusePath) {
+      const startSize = mineCache?.size() ?? 0;
+      setResumeInfo({
+        path: (cachePath ?? reusePath)!,
+        usage: () => llm.usage?.(),
+        saved: () => (mineCache?.size() ?? 0) > startSize || ("storedCount" in llm && (llm as ReturnType<typeof cachedLlm>).storedCount() > 0),
+      });
+    }
     let rules = await extractRules(sendable, llm, {
       maxComments: intFlag("max-comments", 1000),
       minOccurrences: intFlag("min-occurrences", 2),
@@ -457,11 +469,11 @@ async function main(): Promise<void> {
   }
 }
 
-let resumeFile: string | undefined;
-const resumeHint = () => `Progress so far is saved in ${resumeFile}; run the same command again to resume without paying again for the batches that finished.`;
-/** With a cache file, finished batches are written to it as they complete; say so when a run is cut short. */
-function setResumeFile(path: string): void {
-  resumeFile = path;
+let resumeInfo: { path: string; usage: () => { calls: number; inputTokens: number; outputTokens: number } | undefined; saved: () => boolean } | undefined;
+const resumeHint = (): string => (resumeInfo ? describeResume(resumeInfo.path, resumeInfo.saved(), resumeInfo.usage()) : "");
+/** With a cache file, finished batches are written to it as they complete; say what was kept when a run is cut short. */
+function setResumeInfo(info: NonNullable<typeof resumeInfo>): void {
+  resumeInfo = info;
   process.once("SIGINT", () => {
     console.error(`\nInterrupted. ${resumeHint()}`);
     process.exit(130);
@@ -471,7 +483,7 @@ function setResumeFile(path: string): void {
 /** One-line message for the user; the stack trace is only shown when debugging. */
 function reportError(error: unknown): never {
   console.error(describeError(error));
-  if (resumeFile) console.error(resumeHint());
+  if (resumeInfo) console.error(resumeHint());
   if (process.env.PRECEDENT_DEBUG && error instanceof Error && error.stack) console.error(error.stack);
   process.exit(1);
 }

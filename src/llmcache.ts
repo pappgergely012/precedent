@@ -9,6 +9,8 @@ export const STAGE_CACHE_VERSION = "1";
 
 /** Answers the model gave, by request key. */
 export interface ResponseStore {
+  /** Set when the file exists but cannot be read (it is kept aside as FILE.unreadable on the first save). */
+  note?: string;
   get(key: string): unknown | undefined;
   set(key: string, value: unknown): void;
   save(): Promise<void>;
@@ -34,17 +36,27 @@ const FileSchema = z.object({ version: z.literal(1), responses: z.record(z.strin
 /** Responses stored as JSON at `path`. A missing, unreadable or outdated file is an empty store. */
 export async function fileStore(path: string): Promise<ResponseStore> {
   let initial: Record<string, unknown> = {};
+  let note: string | undefined;
+  let backUpFirst = false;
   try {
     initial = FileSchema.parse(JSON.parse(await readFile(path, "utf8"))).responses;
-  } catch {
-    // Start empty: a cache is only ever an optimisation.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      backUpFirst = true;
+      note = `${path} is unreadable; starting without it. The old file is kept as ${path}.unreadable when the first answers are saved.`;
+    }
   }
   const store = memoryStore(initial);
   return {
+    note,
     get: store.get,
     set: store.set,
     async save() {
       await mkdir(dirname(path), { recursive: true });
+      if (backUpFirst) {
+        await rename(path, `${path}.unreadable`).catch(() => {});
+        backUpFirst = false;
+      }
       const tmp = `${path}.${process.pid}.tmp`; // atomic, as in the principle cache
       await writeFile(tmp, `${JSON.stringify({ version: 1, responses: store.entries() })}\n`);
       await rename(tmp, path);
@@ -64,7 +76,7 @@ export function requestKey(prompt: string, schema: z.ZodTypeAny, model: string, 
   return `${hash}#${occurrence}`;
 }
 
-export type CachedLlm = Llm & { cacheStats(): CacheStats; save(): Promise<void> };
+export type CachedLlm = Llm & { cacheStats(): CacheStats; save(): Promise<void>; /** Answers received and stored by this run (a started call that failed is not counted). */ storedCount(): number };
 
 /**
  * Wraps a model client so every structured answer is stored and re-used. Because the key is the
@@ -76,8 +88,10 @@ export function cachedLlm(inner: Llm, store: ResponseStore, model: string, versi
   // With saveEachCall every new answer is written as soon as it arrives (one write at a time), so a run that dies halfway
   // keeps what it already paid for.
   let writing: Promise<void> = Promise.resolve();
+  let newAnswers = 0;
   const seen = new Map<string, number>();
   return {
+    storedCount: () => newAnswers,
     usage: inner.usage?.bind(inner),
     cacheStats: () => ({ ...stats }),
     save: () => store.save(),
@@ -97,6 +111,7 @@ export function cachedLlm(inner: Llm, store: ResponseStore, model: string, versi
       stats.misses++;
       const value = await inner.parse(prompt, schema);
       store.set(key, value);
+      newAnswers++;
       if (opts.saveEachCall) {
         writing = writing.then(() => store.save());
         await writing;

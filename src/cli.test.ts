@@ -220,3 +220,29 @@ describe("cli mine --reuse-extractions", () => {
     expect(run(["mine", "--help"]).stdout).toContain("--reuse-extractions FILE");
   });
 });
+
+describe("cli mine with a saved snapshot and a cache", () => {
+  const dir = mkdtempSync(join(tmpdir(), "precedent-snap-cache-"));
+  const comments = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, prNumber: 100 + i, reviewer: i % 2 ? "anna" : "bob", body: "Please add a rate limit to this new endpoint.", path: "src/api/users.ts", diffHunk: "@@", url: `https://github.com/o/r/pull/${100 + i}#discussion_r${i + 1}`, createdAt: "2026-09-01T00:00:00Z" }));
+  const snap = join(dir, "snap.json");
+  writeFileSync(snap, JSON.stringify({ version: 1, repo: "o/r", fetchedAt: "2026-10-20T00:00:00Z", comments }));
+
+  it("does not say 'Fetched' when the comments came from the snapshot, and --dry-run warns about, and does not count, a cache from another model", () => {
+    const old = join(dir, "old.json");
+    writeFileSync(old, JSON.stringify({ version: 1, meta: { promptVersion: "0", model: "claude-old" }, entries: Object.fromEntries(comments.map((c) => [String(c.id), { k: "stale", p: "x" }])) }));
+    const r = run(["mine", "o/r", "--comments-file", snap, "--dry-run", "--cache", old]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("GitHub is not contacted");
+    expect(r.stdout).not.toContain("Fetched 5 review comments");
+    expect(r.stdout).not.toContain("already in the cache");
+    expect(r.stderr).toContain("none of its answers will be reused");
+  });
+
+  it("names the failing field of a bad snapshot instead of printing a bracket", () => {
+    const bad = join(dir, "bad.json");
+    writeFileSync(bad, JSON.stringify({ version: 1, repo: "o/r", fetchedAt: "x", comments: [{ id: "one" }] }));
+    const r = run(["mine", "o/r", "--comments-file", bad, "--dry-run"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("comments.0.id");
+  });
+});

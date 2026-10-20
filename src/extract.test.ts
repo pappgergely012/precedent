@@ -608,3 +608,40 @@ describe("an interrupted run keeps what it already paid for", () => {
     expect((await fileCache(file, "model-b")).note).toContain("none of its answers will be reused");
   });
 });
+
+describe("cache files that cannot be used", () => {
+  it("a file made by another model is not used at all, and a cut file is reported and kept aside, not silently replaced", async () => {
+    const { mkdtempSync, readFileSync, existsSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { fileCache } = await import("./cache.js");
+    const { fileStore } = await import("./llmcache.js");
+    const dir = mkdtempSync(join(tmpdir(), "precedent-bad-cache-"));
+
+    const made = join(dir, "a.json");
+    const a = await fileCache(made, "model-a");
+    a.set(1, cacheText(comment(1), 1), "Some rule");
+    await a.save();
+    const other = await fileCache(made, "model-b");
+    expect(other.size()).toBe(0); // the notice says nothing is reused, and nothing is
+    expect(other.note).toContain("none of its answers will be reused");
+    expect((await fileCache(made, "model-a")).size()).toBe(1);
+
+    const cut = join(dir, "cut.json");
+    writeFileSync(cut, '{"version":1,"entries":{"1":{"k":"abc","p":"Some');
+    const c = await fileCache(cut, "model-a");
+    expect(c.note).toContain("is unreadable");
+    expect(c.size()).toBe(0);
+    c.set(2, cacheText(comment(2), 1), "Other");
+    await c.save();
+    expect(existsSync(`${cut}.unreadable`)).toBe(true);
+    expect(readFileSync(`${cut}.unreadable`, "utf8")).toContain('"p":"Some');
+    expect(JSON.parse(readFileSync(cut, "utf8")).entries["2"]).toBeDefined();
+
+    expect((await fileCache(join(dir, "missing.json"), "model-a")).note).toBeUndefined();
+    writeFileSync(join(dir, "r.json"), "not json");
+    const store = await fileStore(join(dir, "r.json"));
+    expect(store.note).toContain("is unreadable");
+    expect((await fileStore(join(dir, "none.json"))).note).toBeUndefined();
+  });
+});

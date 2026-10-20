@@ -33,7 +33,20 @@ export async function loadOrFetchComments(
   if (!path) return fetchComments();
   const gz = path.endsWith(".gz");
   const existing = await readFile(path).then(
-    (bytes) => SnapshotSchema.parse(JSON.parse((gz ? gunzipSync(bytes) : bytes).toString("utf8"))),
+    (bytes) => {
+      let json: unknown;
+      try {
+        json = JSON.parse((gz ? gunzipSync(bytes) : bytes).toString("utf8"));
+      } catch (error) {
+        throw new Error(`Cannot use snapshot ${path}: ${(error as Error).message.split("\n")[0]}`);
+      }
+      const parsed = SnapshotSchema.safeParse(json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(file)"}: ${i.message}`);
+        throw new Error(`Cannot use snapshot ${path}: ${issues.join("; ")}`);
+      }
+      return parsed.data;
+    },
     (error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
       throw new Error(`Cannot use snapshot ${path}: ${error.message.split("\n")[0]}`);
