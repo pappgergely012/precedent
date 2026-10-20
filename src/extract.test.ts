@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditSupport, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources, mergeWithPreClusters, preClusters } from "./extract.js";
+import { auditSupport, cacheText, dedupeRules, extractRules, filterComments, isSingleReviewer, mergeCandidates, mergeSharedSources, mergeWithPreClusters, preClusters } from "./extract.js";
 import type { Rule } from "./rule.js";
 import type { ReviewComment } from "./github.js";
 import type { Llm } from "./llm.js";
@@ -495,3 +495,45 @@ describe("sharedMergeThreshold (flag-gated variant)", () => {
     expect(pooled[0]!.sources).toHaveLength(8);
   });
 });
+
+describe("reusing per-comment extractions from a file (--reuse-extractions)", () => {
+  const answersFor = (ids: number[], all: number[]) => [
+    { items: ids.map((id) => ({ id, principle: "Add a rate limit to new endpoints" })) },
+    { rules: [{ description: "Add a rate limit to new endpoints", scope: [], commentIds: all }] },
+    { rules: [{ index: 0, supportingIds: all, revisedDescription: null }] },
+    { groups: [] },
+  ];
+  const spy = (...answers: unknown[]) => {
+    const prompts: string[] = [];
+    let i = 0;
+    return { prompts, llm: { parse: async (p: string, schema: { parse: (v: unknown) => unknown }) => (prompts.push(p), schema.parse(answers[i++])) } as unknown as Llm };
+  };
+
+  it("asks only about new or edited comments, but runs merge, audit and dedupe again on every run", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { fileCache } = await import("./cache.js");
+    const file = join(mkdtempSync(join(tmpdir(), "precedent-reuse-")), "ext.json");
+
+    const first = spy(...answersFor([1, 2, 3, 4], [1, 2, 3, 4]));
+    await extractRules([1, 2, 3, 4].map((id) => comment(id)), first.llm, { cache: await fileCache(file, "m") });
+    expect(first.prompts.length).toBeGreaterThanOrEqual(3); // extraction, merge, audit
+
+    // second run: comment 5 is new, comment 2 was edited; 1, 3 and 4 are reused from the file
+    const second = spy(...answersFor([2, 5], [1, 2, 3, 4, 5]));
+    const cache = await fileCache(file, "m");
+    await extractRules([comment(1), comment(2, { body: "Please add a rate limit to this new endpoint (edited)." }), comment(3), comment(4), comment(5)], second.llm, { cache });
+    const extraction = second.prompts[0]!;
+    expect(extraction).toContain("[2]");
+    expect(extraction).toContain("[5]");
+    expect(extraction).not.toMatch(/\[1\]|\[3\]|\[4\]/);
+    expect(cache.hits()).toBe(3);
+    expect(second.prompts.length).toBeGreaterThanOrEqual(3); // extraction, then merge and audit again: nothing replays them
+
+    // a different model never reuses the file
+    const other = await fileCache(file, "another-model");
+    expect(other.get(1, cacheText(comment(1), 1))).toBeUndefined();
+  });
+});
+

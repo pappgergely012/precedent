@@ -205,3 +205,18 @@ describe("cli compare", () => {
     expect(run(["compare", "--approved", join(dir, "nope.json")]).stderr).toContain("not found");
   });
 });
+
+describe("cli mine --reuse-extractions", () => {
+  it("is refused together with --cache or --no-cache, before fetching anything", () => {
+    for (const other of [["--cache", "c.json"], ["--no-cache"]]) {
+      const r = run(["mine", "o/r", "--reuse-extractions", "e.json", ...other, "--dry-run"]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("--reuse-extractions cannot be combined with --cache or --no-cache");
+      expect(r.stdout).not.toContain("Fetched");
+    }
+  });
+
+  it("is listed in the mine help", () => {
+    expect(run(["mine", "--help"]).stdout).toContain("--reuse-extractions FILE");
+  });
+});

@@ -7,13 +7,14 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
   },
   mine: {
     usage: [
-      "precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--redact] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all] [--verbose]",
+      "precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--reuse-extractions FILE] [--redact] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all] [--verbose]",
     ],
     about: "Mine the rules a team enforces in review from past pull request comments. Needs GITHUB_TOKEN and PRECEDENT_ANTHROPIC_API_KEY.",
     flags: [
       ["--out FILE", "save every rule to a rules file"],
       ["--max-pages N / --max-comments N / --max-age-days N / --min-occurrences N", "how much history to read and how much evidence a rule needs"],
       ["--cache FILE / --no-cache", "keep and re-use the model's answers (FILE and FILE.responses.json); --no-cache ignores them"],
+      ["--reuse-extractions FILE", "reuse only the per-comment judgements saved in FILE (same format as --cache); merge, audit and dedupe still call the model; not combinable with --cache/--no-cache"],
       ["--redact", "mask obvious secrets and emails before text is sent to the model (best effort)"],
       ["--dry-run", "print the expected model calls and tokens without calling the model"],
       ["--verify", "re-fetch every cited comment and drop rules whose citations do not resolve"],
