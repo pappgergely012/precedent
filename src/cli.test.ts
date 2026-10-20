@@ -178,3 +178,30 @@ describe("cli per-command help", () => {
     for (const c of ["mine", "stability", "review"]) expect(all.split("\n").filter((l) => l.includes(`precedent ${c}`)).every((l) => l.includes("--redact"))).toBe(true);
   });
 });
+
+describe("cli compare", () => {
+  const dir = mkdtempSync(join(tmpdir(), "precedent-compare-"));
+  const file = (name: string, rules: unknown[]) => {
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-20T00:00:00Z", rules }));
+    return path;
+  };
+  const r = (id: string, description: string, n: number) => ({ id, description, scope: [], confidence: 0.6, sources: [1, 2, 3].map((i) => ({ prNumber: n + i, commentUrl: `https://github.com/o/r/pull/${n + i}#discussion_r${n + i}`, reviewer: `u${i}` })) });
+
+  it("prints the difference without a key or network, leaves the approved file alone, and saves new candidates with --out", () => {
+    const approved = file("approved.json", [r("a", "Use gate().", 0)]);
+    const fresh = file("fresh.json", [r("f1", "Use gate().", 0), r("f2", "Add a rate limit.", 100)]);
+    const before = readFileSync(approved, "utf8");
+    const out = join(dir, "new.json");
+    const res = run(["compare", "--approved", approved, "--rules", fresh, "--out", out], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("1 unchanged, 0 reworded, 1 new, 0 not found again");
+    expect(readFileSync(approved, "utf8")).toBe(before);
+    expect(JSON.parse(readFileSync(out, "utf8")).rules.map((x: { id: string }) => x.id)).toEqual(["f2"]);
+  });
+
+  it("explains a missing flag and a missing file in one line", () => {
+    expect(run(["compare"]).stderr).toContain("compare needs --approved FILE");
+    expect(run(["compare", "--approved", join(dir, "nope.json")]).stderr).toContain("not found");
+  });
+});

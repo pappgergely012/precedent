@@ -19,6 +19,7 @@ import { helpFor } from "./help.js";
 import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
 import { readRulesFile, writeRulesFile } from "./rulesfile.js";
+import { diffRules, renderRuleDiff } from "./rulediff.js";
 
 const USAGE = helpFor();
 
@@ -38,6 +39,7 @@ const OPTIONS = {
   out: { type: "string" },
   rules: { type: "string" },
   diff: { type: "string" },
+  approved: { type: "string" },
   post: { type: "boolean" },
   verify: { type: "boolean" },
   cache: { type: "string" },
@@ -232,6 +234,18 @@ async function main(): Promise<void> {
     );
     if (values["comments-file"]) window = "in the saved snapshot";
     for (const line of describeFit(repo, fitMetrics(comments), window)) console.log(line);
+  } else if (command === "compare") {
+    if (!values.approved) fail("compare needs --approved FILE (the rules your team approved) and --rules FILE (the new run).");
+    const readFile_ = (path: string) =>
+      readRulesFile(path).catch((error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Rules file ${path} not found.` : `Cannot read ${path}: ${error.message.split("\n")[0]}`));
+    const approvedFile = await readFile_(values.approved);
+    const freshFile = await readFile_(values.rules ?? DEFAULT_RULES_FILE);
+    const diff = diffRules(approvedFile.rules, freshFile.rules);
+    console.log(renderRuleDiff(diff));
+    if (values.out) {
+      await writeRulesFile(values.out, freshFile.repo, diff.added);
+      console.log(`\nWrote ${diff.added.length} new candidates to ${values.out}. The approved file is not changed.`);
+    }
   } else if (command === "export") {
     const format = values.format;
     if (format !== "claude" && format !== "agents" && format !== "cursor") fail("--format must be one of: claude, agents, cursor.");
