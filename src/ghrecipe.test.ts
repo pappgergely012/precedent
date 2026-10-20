@@ -184,3 +184,35 @@ describe("file names in the review output", () => {
     expect(out.slice(1, -1)).not.toMatch(/[`\[\]()<>\n]/);
   });
 });
+
+describe("recipe script: bounded work and fail-open writes", () => {
+  it("handles very long runs of unmatched < and [ in linear time", () => {
+    for (const filler of ["<", "[", "<a ", "[x](", "<img "]) {
+      const start = Date.now();
+      const out = recipe.sanitize(filler.repeat(Math.ceil(160_000 / filler.length)));
+      expect(typeof out).toBe("string");
+      expect(Date.now() - start, `filler ${JSON.stringify(filler)}`).toBeLessThan(1500);
+    }
+  });
+  it("defuses e-mail addresses so GitHub does not turn them into mailto links", () => {
+    const out = recipe.sanitize("contact dana.smith+x@example.co.uk or ops@corp.example for details");
+    expect(out).not.toMatch(/[\w.]@[\w.]/);
+    expect(out).toContain("dana.smith+x`@`example.co.uk");
+  });
+  it("still exits normally when the summary or comment file cannot be written", () => {
+    const work = mkdtempSync(join(tmpdir(), "precedent-unwritable-"));
+    const warns: string[] = [];
+    const origWarn = console.warn;
+    const origLog = console.log;
+    console.warn = (m: string) => void warns.push(String(m));
+    console.log = () => {};
+    try {
+      expect(() => recipe.main({ GITHUB_STEP_SUMMARY: work, COMMENT_FILE: join(work, "no", "such", "dir", "c.md"), PATH: process.env.PATH })).not.toThrow();
+    } finally {
+      console.warn = origWarn;
+      console.log = origLog;
+    }
+    expect(warns.join("\n")).toContain("could not write the job summary");
+    expect(warns.join("\n")).toContain("could not write the comment file");
+  });
+});
