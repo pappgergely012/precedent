@@ -448,8 +448,8 @@ describe("extraction votes (flag-gated variant)", () => {
   });
 });
 
-describe("sharedMergeThreshold (flag-gated variant)", () => {
-  it("pools rules that share only one comment when the threshold is near zero, and not by default", async () => {
+describe("sharedMergeThreshold", () => {
+  it("pools rules that share only one comment by default, and keeps them apart at the old 0.5", async () => {
     const ids = [1, 2, 3, 4, 5, 6, 7, 8];
     const answers = () => [
       { items: ids.map((id) => ({ id, principle: `Rule text number ${id} about endpoints` })) },
@@ -461,9 +461,9 @@ describe("sharedMergeThreshold (flag-gated variant)", () => {
       { groups: [] },
     ];
     const all = ids.map((id) => comment(id));
-    // one shared comment out of the smaller rule's four is 0.25, below the default 0.5
-    expect(await extractRules(all, fakeLlm(...answers()))).toHaveLength(2);
-    const pooled = await extractRules(all, fakeLlm(...answers()), { sharedMergeThreshold: 0.01 });
+    // one shared comment out of the smaller rule's four is 0.25: below the old 0.5, above the default 0.01
+    expect(await extractRules(all, fakeLlm(...answers()), { sharedMergeThreshold: 0.5 })).toHaveLength(2);
+    const pooled = await extractRules(all, fakeLlm(...answers()));
     expect(pooled).toHaveLength(1);
     expect(pooled[0]!.sources).toHaveLength(8);
   });

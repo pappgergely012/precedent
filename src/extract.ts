@@ -38,7 +38,7 @@ export interface ExtractOptions {
   extractionVotes?: number;
   /**
    * Two rules whose cited comments overlap by at least this share of the smaller one are pooled into
-   * one rule at the end (0.5 by default). A value near 0 pools rules that share any single comment,
+   * one rule at the end (0.01 by default; the old default was 0.5). A value near 0 pools rules that share any single comment,
    * so a rule's identity is its set of cited comments. Not measured yet.
    */
   sharedMergeThreshold?: number;
@@ -61,6 +61,9 @@ const DEFAULT_MAX_AGE_DAYS = 730;
 const DEFAULT_MIN_RECENT_COMMENTS = 300;
 /** Confidence is scaled by this when every source comment comes from one reviewer. */
 const SINGLE_REVIEWER_FACTOR = 0.5;
+
+/** Share of the smaller rule's comments two rules must have in common to be pooled (0.01 = any single shared comment). */
+export const DEFAULT_SHARED_MERGE_THRESHOLD = 0.01;
 /** Candidates merged per model call; larger inputs overflow the output limit. */
 const MERGE_BATCH_SIZE = 150;
 
@@ -625,7 +628,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
   if (audited.dropped > 0) log(`Dropped ${audited.dropped} rules whose comments do not support them`);
   if (audited.rules.length < 2) return audited.rules;
 
-  const deduped = mergeSharedSources(await dedupeRules(audited.rules, llm), opts.sharedMergeThreshold ?? 0.5);
+  const deduped = mergeSharedSources(await dedupeRules(audited.rules, llm), opts.sharedMergeThreshold ?? DEFAULT_SHARED_MERGE_THRESHOLD);
   if (deduped.length < audited.rules.length) log(`Merged ${audited.rules.length - deduped.length} near-duplicate rules`);
   return deduped;
 }
