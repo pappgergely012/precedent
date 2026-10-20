@@ -11,6 +11,11 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "license": "Apache-2.0",
   "private": true,
   "engines": {
@@ -20,13 +25,16 @@
     "precedent": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "eval:docs": "tsx scripts/eval-docs.ts",
     "eval:docs:e2e": "tsx scripts/eval-docs-e2e.ts",
-    "eval:refresh": "tsx scripts/eval-refresh.ts"
+    "eval:refresh": "tsx scripts/eval-refresh.ts",
+    "check:pack": "node scripts/check-pack.mjs",
+    "snapshots": "tsx scripts/save-snapshots.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
