@@ -117,3 +117,22 @@ describe("cli help, version and early validation", () => {
     expect(r.stderr).not.toContain("ENOENT");
   });
 });
+
+describe("cli review --dry-run", () => {
+  it("estimates the calls for a local diff without an API key or a model call, and honours --max-files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "precedent-"));
+    const sources = [1, 2].map((n) => ({ prNumber: n, reviewer: "anna", commentUrl: `https://github.com/o/r/pull/${n}#discussion_r${n}` }));
+    const rules = join(dir, "rules.json");
+    writeFileSync(rules, JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-10-19T00:00:00.000Z", rules: [{ id: "r1", description: "Use gate() in tests.", scope: ["src/**"], confidence: 0.5, sources }] }));
+    const file = (name: string) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1,1 +1,2 @@\n keep\n+added\n`;
+    const diff = join(dir, "pr.diff");
+    writeFileSync(diff, [file("src/a.ts"), file("src/b ts/c.ts"), file("docs/readme.md")].join(""));
+    const r = run(["review", "--diff", diff, "--rules", rules, "--dry-run"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Reviewing 3 changed files");
+    expect(r.stdout).toContain("2 of 3 files have an applicable rule; 2 model calls");
+    expect(r.stdout).toContain("No model call was made.");
+    const capped = run(["review", "--diff", diff, "--rules", rules, "--dry-run", "--max-files", "1"], { PRECEDENT_ANTHROPIC_API_KEY: "", ANTHROPIC_API_KEY: "" });
+    expect(capped.stdout).toContain("1 model calls (cap --max-files 1)");
+  });
+});

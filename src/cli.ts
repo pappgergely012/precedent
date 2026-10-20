@@ -6,7 +6,7 @@ import { cacheText, extractRules, isSingleReviewer, selectUsable } from "./extra
 import { fetchPullDiff, fetchReviewComments, postPullReview } from "./github.js";
 import { DEFAULT_MODEL, anthropicLlm } from "./llm.js";
 import { verifyRules } from "./verify.js";
-import { formatComment, reviewDiff } from "./review.js";
+import { formatComment, reviewDiff, rulesForFile } from "./review.js";
 import { fileCache, memoryCache } from "./cache.js";
 import { loadOrFetchComments } from "./snapshot.js";
 import { cachedLlm, describeCache, fileStore } from "./llmcache.js";
@@ -22,8 +22,8 @@ const USAGE = `Usage:
   precedent mine <owner/repo> [--out FILE] [--max-pages N] [--max-comments N] [--min-occurrences N] [--max-age-days N] [--cache FILE] [--no-cache] [--pre-merge] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--dry-run] [--verify] [--docs] [--all]
   precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]
   precedent stability <owner/repo> [--runs N] [--comments-file FILE] [--extraction-votes N] [--shared-merge X] [--top N] [--verbose] [--pin-extraction] [--out FILE] [--max-comments N]
-  precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact]
-  precedent review --diff FILE [--rules FILE]`;
+  precedent review <owner/repo> <pr-number> [--rules FILE] [--post] [--redact] [--dry-run] [--max-files N]
+  precedent review --diff FILE [--rules FILE] [--dry-run] [--max-files N]`;
 
 const DEFAULT_RULES_FILE = ".precedent/rules.json";
 
@@ -62,6 +62,7 @@ const OPTIONS = {
   "extraction-votes": { type: "string" },
   "shared-merge": { type: "string" },
   "dry-run": { type: "boolean" },
+  "max-files": { type: "string" },
   verbose: { type: "boolean" },
   "max-comments": { type: "string" },
   "min-occurrences": { type: "string" },
@@ -288,7 +289,7 @@ async function main(): Promise<void> {
       console.log(`Wrote every rule of the ${runs} runs to ${values.out}`);
     }
   } else if (command === "review" && (values.diff || (repo && prArg))) {
-    requireAnthropicKey();
+    if (!values["dry-run"]) requireAnthropicKey();
     const token = process.env.GITHUB_TOKEN;
     let prNumber = 0;
     if (!values.diff) {
@@ -310,7 +311,19 @@ async function main(): Promise<void> {
     const target = values.diff ? values.diff : `${repo}#${prNumber}`;
     console.log(`Reviewing ${files.length} changed files of ${target} against ${rules.length} rules.`);
 
-    const violations = await reviewDiff(files, rules, anthropicLlm(), { onProgress: progress });
+    // One model call per file that some rule applies to; a very large PR is capped so it cannot run up an unbounded bill.
+    const maxFiles = intFlag("max-files", 100);
+    const reviewable = files.filter((f) => rulesForFile(rules, f.path).length > 0);
+    if (values["dry-run"]) {
+      const tokens = reviewable.reduce((sum, f) => sum + Math.round((Math.min(f.patch.length, 12_000) + rulesForFile(rules, f.path).reduce((n, r) => n + r.description.length + 8, 0)) / 3.5) + 350, 0);
+      const calls = Math.min(reviewable.length, maxFiles);
+      console.log(`Dry run: ${reviewable.length} of ${files.length} files have an applicable rule; ${calls} model calls (cap --max-files ${maxFiles}), roughly ${Math.round((tokens * calls) / Math.max(1, reviewable.length)).toLocaleString("en-US")} input tokens (a rough estimate from text length). No model call was made.`);
+      return;
+    }
+    const capped = reviewable.length > maxFiles ? new Set(reviewable.slice(0, maxFiles)) : undefined;
+    if (capped) console.log(`Notice: ${reviewable.length} files have an applicable rule; only the first ${maxFiles} are reviewed (raise --max-files to review more).`);
+
+    const violations = await reviewDiff(capped ? files.filter((f) => capped.has(f)) : files, rules, anthropicLlm(), { onProgress: progress });
     const byId = new Map(rules.map((r) => [r.id, r]));
     const comments = violations.map((v) => ({ path: v.path, line: v.line, body: formatComment(v, byId.get(v.ruleId)!) }));
 
