@@ -24,6 +24,19 @@ You get a ranked list of rules. Each rule has a one-sentence statement and links
 - Rule quality is still being measured. Read the citations before trusting a rule.
 - Rules are only as good as your review history: a repository whose review comments are mostly one-off remarks yields few or no recurring rules.
 
+## Install
+
+Precedent is not published to npm yet. From a clone (Node 22+, pnpm):
+
+```bash
+pnpm install && pnpm build
+node dist/cli.js mine owner/repo          # the commands below call this `precedent`
+npm pack                                  # makes precedent-0.0.0.tgz (only dist, README and LICENSE)
+npm install ./precedent-0.0.0.tgz         # in another project: `npx precedent --help`
+```
+
+`precedent --help` prints the usage and `precedent --version` the version.
+
 ## Usage
 
 ```bash
@@ -44,7 +57,7 @@ precedent review --diff pr.diff
 Needs `GITHUB_TOKEN` and `PRECEDENT_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`). Uses `claude-haiku-5-5` by default (override with `PRECEDENT_MODEL`).
 
 - `mine` works like this:
-  - It reads up to `--max-pages` pages of review comments (default 30; paging stops early once enough top-level comments are collected). Replies, very short comments, comments written by the pull request's own author and repeated identical text from one reviewer on one pull request are ignored.
+  - It reads up to `--max-pages` pages of review comments (default 30; paging stops early once enough top-level comments are collected). `--max-pages` is a soft target: after that many pages the fetch keeps going (up to 30 pages in total) until it has collected 300 top-level comments, so `--max-pages 1` on a repository with many threaded replies can still read several hundred comments. Replies, very short comments, comments written by the pull request's own author and repeated identical text from one reviewer on one pull request are ignored.
   - It analyses the newest `--max-comments` (default 1000), preferring comments from the last `--max-age-days` (default 730). If that would leave fewer than 300 usable comments, the newest 300 are kept whatever their age, so quiet repositories keep their history.
   - A rule needs at least `--min-occurrences` comments (default 2) from at least 2 distinct pull requests. An audit pass then drops the comments that do not actually state the rule (one-off remarks, exceptions, other languages or scopes) and narrows rule text that claims more than its comments say, and near-duplicate rules are merged in a final pass.
   - A rule's confidence is its number of distinct source pull requests divided by 5, capped at 1, and halved when only one reviewer asked for it (such a rule also carries a "single reviewer" flag).
