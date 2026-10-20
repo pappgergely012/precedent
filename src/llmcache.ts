@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import type { Llm } from "./llm.js";
@@ -45,7 +45,9 @@ export async function fileStore(path: string): Promise<ResponseStore> {
     set: store.set,
     async save() {
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, `${JSON.stringify({ version: 1, responses: store.entries() })}\n`);
+      const tmp = `${path}.${process.pid}.tmp`; // atomic, as in the principle cache
+      await writeFile(tmp, `${JSON.stringify({ version: 1, responses: store.entries() })}\n`);
+      await rename(tmp, path);
     },
   };
 }
@@ -69,8 +71,11 @@ export type CachedLlm = Llm & { cacheStats(): CacheStats; save(): Promise<void> 
  * whole prompt, this covers each stage (extraction, merge, audit, dedupe, docs) alike: re-mining
  * unchanged data asks the model nothing and gives the same rules.
  */
-export function cachedLlm(inner: Llm, store: ResponseStore, model: string, version = STAGE_CACHE_VERSION): CachedLlm {
+export function cachedLlm(inner: Llm, store: ResponseStore, model: string, version = STAGE_CACHE_VERSION, opts: { saveEachCall?: boolean } = {}): CachedLlm {
   const stats: CacheStats = { hits: 0, misses: 0 };
+  // With saveEachCall every new answer is written as soon as it arrives (one write at a time), so a run that dies halfway
+  // keeps what it already paid for.
+  let writing: Promise<void> = Promise.resolve();
   const seen = new Map<string, number>();
   return {
     usage: inner.usage?.bind(inner),
@@ -92,6 +97,10 @@ export function cachedLlm(inner: Llm, store: ResponseStore, model: string, versi
       stats.misses++;
       const value = await inner.parse(prompt, schema);
       store.set(key, value);
+      if (opts.saveEachCall) {
+        writing = writing.then(() => store.save());
+        await writing;
+      }
       return value;
     },
   };
