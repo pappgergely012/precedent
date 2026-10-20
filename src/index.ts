@@ -17,3 +17,4 @@ export { renderBlock, applyBlock, writeExport, selectRules, suspiciousRules, Exp
 export { redactText, createRedactor, describeRedaction, type RedactionKind, type RedactionCounts } from "./redact.js";
 export { renderMineOutput } from "./mineoutput.js";
 export { compareRuns, stabilityCuts, summarizeStability, isCoreRule } from "./stability.js";
+export { fitMetrics, fitTier, describeFit, type FitMetrics, type FitTier } from "./fit.js";

@@ -37,6 +37,14 @@ npm install ./precedent-0.0.0.tgz         # in another project: `npx precedent -
 
 `precedent --help` prints the usage and `precedent --version` the version.
 
+## Does it fit your repository?
+
+```bash
+precedent check owner/repo
+```
+
+A few seconds, no model and no API key: it counts the inline review comments of the last 12 months (at most 1,000), the reviewers, how many reviewers wrote 3 or more, how much of the review one person does, and prints whether core rules are `likely`, `possible` or `unlikely`, with what is missing. It uses the thresholds of our public-repository survey (about 300 comments and 8 active reviewers for "likely"). It is a heuristic on counts only: on the 11 repositories we mined, it agreed with the number of core rules actually found on 8, and it is lenient (`possible` often means few or none). Only inline review comments count; teams that review in the pull request conversation, and private repositories you have not pointed it at, are not seen. On rails/rails, ripgrep and prettier it printed `likely`, `unlikely` and `possible`, matching the survey.
+
 ## Usage
 
 ```bash
