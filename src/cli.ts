@@ -60,6 +60,7 @@ const OPTIONS = {
   id: { type: "string", multiple: true },
   list: { type: "boolean" },
   "all-core": { type: "boolean" },
+  "force-related": { type: "boolean" },
   post: { type: "boolean" },
   verify: { type: "boolean" },
   cache: { type: "string" },
@@ -87,6 +88,11 @@ const OPTIONS = {
   "min-occurrences": { type: "string" },
   "max-age-days": { type: "string" },
 } as const;
+// `precedent compare | head` closes the pipe early; that is not an error.
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") process.exit(0);
+  throw error;
+});
 const { positionals, values } = parseCli();
 const [command, repo, prArg] = positionals;
 
@@ -257,18 +263,24 @@ async function main(): Promise<void> {
   } else if (command === "approve") {
     const fromPath = values.from ?? DEFAULT_RULES_FILE;
     const toPath = values.to ?? APPROVED_RULES_FILE;
-    const missing = (path: string) => (error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Rules file ${path} not found. Run "precedent mine owner/repo --out ${path}" first.` : error.message.split("\n")[0]!);
+    const missing = (path: string) => (error: NodeJS.ErrnoException) => fail(error.code === "EISDIR" ? `${path} is a directory, not a rules file.` : error.code === "ENOENT" ? `Rules file ${path} not found. Run "precedent mine owner/repo --out ${path}" first.` : error.message.split("\n")[0]!);
     const candidates = await readRulesFile(fromPath).catch(missing(fromPath));
     if (values.list || (!values.id?.length && !values["all-core"])) {
       for (const r of candidates.rules) console.log(`${safeLine(r.id, 40)}  [${ruleTier(r)}] ${safeLine(r.description, 140)} (${r.sources.length} comments)`);
       console.log(`\n${candidates.rules.length} candidates in ${fromPath}. Pick with --id ID (repeat for several) or --all-core; they are pinned into ${toPath}, which is yours to edit and commit.`);
     } else {
-      const { chosen, unknown } = selectCandidates(candidates.rules, { ids: values.id, allCore: values["all-core"] });
+      const { chosen, unknown, duplicateIds } = selectCandidates(candidates.rules, { ids: values.id, allCore: values["all-core"] });
+      if (duplicateIds.length > 0) fail(`More than one rule in ${fromPath} has the id ${duplicateIds[0]}; edit the file so ids are unique.`);
       if (unknown.length > 0) fail(`No rule with id ${unknown.join(", ")} in ${fromPath}. Run "precedent approve --list" to see the ids.`);
       if (samePath(fromPath, toPath)) fail(`--from and --to are the same file (${toPath}); refusing to overwrite the candidates with the approved rules.`);
       const existing = existsSync(toPath) ? await readRulesFile(toPath).catch(missing(toPath)) : undefined;
       if (existing && existing.repo !== candidates.repo) fail(`${toPath} is for ${existing.repo} but ${fromPath} is for ${candidates.repo}; refusing to mix them.`);
-      const { rules, added, skipped } = approveRules(existing?.rules ?? [], chosen, values.note?.trim().slice(0, 500) || undefined);
+      const { rules, added, skipped, warned } = approveRules(existing?.rules ?? [], chosen, {
+        note: values.note?.trim().slice(0, 500) || undefined,
+        explicit: new Set(chosen.filter((r) => values.id?.includes(r.id))),
+        forceRelated: values["force-related"],
+      });
+      for (const w of warned) console.log(`warning: ${safeLine(w.rule.description, 100)} is related to the approved rule ${safeLine(w.relatedTo.description, 100)} (same comments, different wording); check you want both`);
       for (const s of skipped) console.log(`skipped: ${safeLine(s.rule.description, 100)} (${safeLine(s.reason, 120)})`);
       if (added.length > 0) await writeRulesFile(toPath, candidates.repo, rules, undefined, existing?.minedAt ?? candidates.minedAt, "approved");
       const noteText = values.note?.trim() && added.length > 0 ? ` with the note "${safeLine(values.note, 80)}"` : "";

@@ -61,7 +61,11 @@ function truncate(text: string, maxChars: number): string {
  * to one line and cap the length.
  */
 export function cleanText(text: string, maxChars = MAX_RULE_CHARS): string {
+  // Links whose scheme runs code or reads local files (`[x](javascript:...)`, data:, vbscript:, file:) keep only their label.
+  const UNSAFE_SCHEME = /\b(?:javascript|vbscript|data|file):[^\s)>\]]*/gi;
   let out = text
+    .replace(/\[([^\]]*)\]\(\s*(?:javascript|vbscript|data|file):(?:[^()]|\([^()]*\))*\)/gi, "$1")
+    .replace(UNSAFE_SCHEME, "[link removed]")
     .replace(/[\r\n\t]+/g, " ")
     .replace(INVISIBLE, "")
     .replace(/</g, "&lt;")

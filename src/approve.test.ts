@@ -28,7 +28,7 @@ describe("approveRules", () => {
 
   it("selects by id or by core tier and reports unknown ids", () => {
     const cands = [rule("rule-1", "Core.", 1, 2, 3), { ...rule("rule-2", "Single reviewer.", 3, 6, 9), sources: src(3, 6, 9) }, rule("rule-3", "Thin.", 7)];
-    expect(selectCandidates(cands, { ids: ["rule-3", "rule-404"] })).toEqual({ chosen: [cands[2]], unknown: ["rule-404"] });
+    expect(selectCandidates(cands, { ids: ["rule-3", "rule-404"] })).toEqual({ chosen: [cands[2]], unknown: ["rule-404"], duplicateIds: [] });
     expect(selectCandidates(cands, { allCore: true }).chosen.map((r) => r.id)).toEqual(["rule-1"]);
   });
 });
@@ -208,5 +208,58 @@ describe("approve --note", () => {
     writeFileSync(join(dir, "c2.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-02-03T00:00:00Z", rules: [rule("rule-1", "Use gate() in tests.", 1, 2, 3)] }));
     expect(sh(["approve", "--from", "c2.json", "--to", "t2.json", "--id", "rule-1", "--note", long]).status).toBe(0);
     expect(JSON.parse(readFileSync(join(dir, "t2.json"), "utf8")).rules[0].note).toHaveLength(500);
+  });
+});
+
+describe("stress-QA fixes: near-duplicates, duplicate ids, BOM, EPIPE, unsafe links", () => {
+  it("--all-core style approval skips a candidate that cites the same comments as an approved rule but says it differently; naming it with --id approves it with a warning", () => {
+    const first = approveRules([], [rule("rule-1", "No docstrings in tests.", 1, 2, 3)]);
+    const near = rule("rule-5", "Do not put ticket numbers in test comments.", 1, 2, 3, 4);
+    const auto = approveRules(first.rules, [near]);
+    expect(auto.added).toEqual([]);
+    expect(auto.skipped[0]!.reason).toContain("related to approved");
+    const named = approveRules(first.rules, [near], { explicit: new Set([near]) });
+    expect(named.added).toHaveLength(1);
+    expect(named.warned[0]!.relatedTo.id).toBe(first.rules[0]!.id);
+    expect(approveRules(first.rules, [near], { forceRelated: true }).added).toHaveLength(1);
+  });
+
+  it("selectCandidates reports duplicate ids instead of silently taking the last", () => {
+    const a = rule("rule-1", "One.", 1, 2, 3);
+    const b = rule("rule-1", "Two.", 4, 5, 6);
+    expect(selectCandidates([a, b], { ids: ["rule-1"] }).duplicateIds).toEqual(["rule-1"]);
+  });
+
+  const cli = resolve("src/cli.ts");
+  const tsx = resolve("node_modules/.bin/tsx");
+  const dir = mkdtempSync(join(tmpdir(), "precedent-stress-"));
+  const sh = (args: string[], input?: string) => spawnSync(tsx, [cli, ...args], { cwd: dir, encoding: "utf8", input, env: { ...process.env, PRECEDENT_ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" } });
+
+  it("reads a rules file that starts with a UTF-8 byte order mark, rejects a directory and duplicate ids in one line", () => {
+    const body = JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-01-01T00:00:00Z", rules: [rule("rule-1", "One.", 1, 2, 3), rule("rule-1", "Two.", 4, 5, 6)] });
+    writeFileSync(join(dir, "bom.json"), String.fromCharCode(0xfeff) + body);
+    expect(sh(["approve", "--from", "bom.json", "--list"]).status).toBe(0);
+    mkdirSync(join(dir, "adir"), { recursive: true });
+    expect(sh(["approve", "--from", "adir", "--list"]).stderr).toContain("is a directory");
+    const dup = sh(["approve", "--from", "bom.json", "--to", "o.json", "--id", "rule-1"]);
+    expect(dup.status).toBe(1);
+    expect(dup.stderr).toContain("More than one rule");
+  });
+
+  it("export removes javascript:, data: and file: links from rule text but keeps the label", () => {
+    const evil = rule("rule-1", "See [the docs](javascript:alert(1)) and [x](data:text/html,hi) or file:///etc/passwd today", 1, 2, 3);
+    writeFileSync(join(dir, "evil.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-01-01T00:00:00Z", rules: [evil] }));
+    const out = sh(["export", "--format", "agents", "--rules", "evil.json", "--all"]).stdout;
+    expect(out).toContain("See the docs and x or [link removed] today");
+    expect(out).not.toMatch(/javascript:|data:text|file:\/\//);
+  });
+
+  it("compare piped into a reader that closes early ends quietly (needs more output than one pipe buffer)", () => {
+    const many = Array.from({ length: 3000 }, (_, i) => rule(`r${i}`, `Rule number ${i} about topic ${i} ${"word ".repeat(40)}`, 10 + i * 3, 11 + i * 3, 12 + i * 3));
+    writeFileSync(join(dir, "big.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-01-01T00:00:00Z", rules: many }));
+    writeFileSync(join(dir, "none.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "2026-01-01T00:00:00Z", rules: [rule("z", "Other.", 90000, 90001)] }));
+    const res = spawnSync("sh", ["-c", `${tsx} ${cli} compare --approved none.json --rules big.json | head -1 >/dev/null`], { cwd: dir, encoding: "utf8", env: { ...process.env } });
+    expect(res.stderr).not.toContain("EPIPE");
+    expect(res.stderr).not.toContain("    at ");
   });
 });
