@@ -116,3 +116,46 @@ describe("cli: files are never overwritten by their own output", () => {
     expect(sh(["mine", "o/r", "--cache", "--no-cache"]).stderr).toContain("cannot be followed by another option");
   });
 });
+
+describe("hand-written rules, export header, approved export and minedAt", () => {
+  const cli = resolve("src/cli.ts");
+  const tsx = resolve("node_modules/.bin/tsx");
+  const dir = mkdtempSync(join(tmpdir(), "precedent-hand-"));
+  const sh = (args: string[]) => spawnSync(tsx, [cli, ...args], { cwd: dir, encoding: "utf8", env: { ...process.env, PRECEDENT_ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" } });
+  const put = (name: string, rules: unknown[], minedAt = "2026-01-02T00:00:00Z") => {
+    mkdirSync(join(dir, ".precedent"), { recursive: true });
+    writeFileSync(join(dir, name), JSON.stringify({ version: 1, repo: "o/r", minedAt, rules }));
+  };
+  const handWritten = { id: "t1", description: "Every endpoint needs a rate limit.", scope: [], confidence: 1 };
+
+  it("a rule your team wrote by hand (no cited comments) works in export and compare", () => {
+    put("hand.json", [handWritten]);
+    const exp = sh(["export", "--format", "agents", "--rules", "hand.json", "--include-emerging", "--include-single-reviewer"]);
+    expect(exp.status).toBe(0);
+    expect(exp.stdout).toContain("Every endpoint needs a rate limit.");
+    const cmp = sh(["compare", "--approved", "hand.json", "--rules", "hand.json"]);
+    expect(cmp.status).toBe(0);
+    expect(cmp.stdout).toContain("Cannot be matched (no source comments)");
+  });
+
+  it("the export header names the file the rules came from", () => {
+    const exp = sh(["export", "--format", "agents", "--rules", "hand.json", "--include-emerging", "--include-single-reviewer"]);
+    expect(exp.stdout).toContain("edit hand.json and re-run");
+    expect(exp.stdout).not.toContain("edit .precedent/rules.json");
+  });
+
+  it("export of the approved file includes every approved rule, even thin ones", () => {
+    put(".precedent/approved.json", [handWritten, { ...rule("a-thin", "Thin but approved.", 1), confidence: 0.2 }]);
+    const exp = sh(["export", "--format", "agents"]);
+    expect(exp.stdout).toContain("Every endpoint needs a rate limit.");
+    expect(exp.stdout).toContain("Thin but approved.");
+    expect(exp.stdout).toContain("edit .precedent/approved.json and re-run");
+  });
+
+  it("compare --out keeps the fresh run's minedAt", () => {
+    put("fresh.json", [rule("f", "Brand new rule.", 90, 91, 92)], "2026-03-04T05:06:07Z");
+    const out = join(dir, "cands.json");
+    expect(sh(["compare", "--approved", "hand.json", "--rules", "fresh.json", "--out", out]).status).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8")).minedAt).toBe("2026-03-04T05:06:07Z");
+  });
+});

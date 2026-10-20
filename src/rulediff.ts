@@ -24,6 +24,17 @@ export interface RuleDiff {
 }
 
 export const MIN_SOURCE_OVERLAP = 0.5;
+/** Two rules that cite the same comments can still be different rules (one comment often says several things). */
+export const MIN_WORDING_SIMILARITY = 0.4;
+
+const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? []);
+
+export function wordingSimilarity(a: string, b: string): number {
+  const x = words(a);
+  const y = words(b);
+  const union = new Set([...x, ...y]).size;
+  return union === 0 ? 0 : [...x].filter((w) => y.has(w)).length / union;
+}
 
 const norm = (text: string) => text.toLowerCase().replace(/\s+/g, " ").replace(/[.\s]+$/, "").trim();
 
@@ -49,7 +60,8 @@ export function diffRules(approved: Rule[], fresh: Rule[]): RuleDiff {
   const pairs: RuleMatch[] = [];
   for (const a of approved) for (const f of fresh) {
     const overlap = overlapOf(a, f);
-    if (overlap >= MIN_SOURCE_OVERLAP) pairs.push({ approved: a, fresh: f, overlap });
+    // Same evidence is not enough: the wording must also be similar, otherwise the pair is only "related".
+    if (overlap >= MIN_SOURCE_OVERLAP && (norm(a.description) === norm(f.description) || wordingSimilarity(a.description, f.description) >= MIN_WORDING_SIMILARITY)) pairs.push({ approved: a, fresh: f, overlap });
   }
   pairs.sort((x, y) => y.overlap - x.overlap || x.approved.id.localeCompare(y.approved.id) || x.fresh.id.localeCompare(y.fresh.id));
   const usedA = new Set<Rule>();

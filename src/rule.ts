@@ -17,7 +17,7 @@ export const RuleSchema = z.object({
   origin: z.enum(["enforced", "both", "conflict"]).optional(),
   /** Where the guide states (or contradicts) the rule, quoted verbatim. */
   docRefs: z.array(z.object({ path: z.string(), quote: z.string() })).optional(),
-  /** Review comments this rule was derived from. */
+  /** Review comments this rule was derived from. Empty for a rule your team wrote by hand. */
   sources: z
     .array(
       z.object({
@@ -26,7 +26,7 @@ export const RuleSchema = z.object({
         reviewer: z.string(),
       }),
     )
-    .min(1),
+    .default([]),
 });
 
 export type Rule = z.infer<typeof RuleSchema>;
