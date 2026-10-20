@@ -23,11 +23,21 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
       ["--comments-file FILE", "use a saved snapshot of the comments"],
     ],
   },
+  approve: {
+    usage: ["precedent approve [--from FILE] [--to FILE] [--list | --id ID ... | --all-core]"],
+    about: "Pin the rules your team has read and accepted into a team-owned file (default .precedent/approved.json). Without a selection it lists the candidates and their ids. Approved rules are never changed or replaced by a later run; `export` and `review` use that file when it exists. No model, no API key.",
+    flags: [
+      ["--from FILE", "the candidates (default .precedent/rules.json)"],
+      ["--to FILE", "the approved file (default .precedent/approved.json)"],
+      ["--id ID / --all-core", "approve these rules / every core rule (read them first)"],
+      ["--list", "list the candidates and ids"],
+    ],
+  },
   compare: {
     usage: ["precedent compare --approved FILE [--rules FILE] [--out FILE]"],
     about: "Treat a new run as a diff against the rules your team already approved. Rules are matched by the review comments they cite, not by wording. The approved file is never changed; --out saves the new candidates for a person to review. No model, no API key.",
     flags: [
-      ["--approved FILE", "the rules file your team approved"],
+      ["--approved FILE", "the rules file your team approved (default .precedent/approved.json if it exists)"],
       ["--rules FILE", "the new run (default .precedent/rules.json)"],
       ["--out FILE", "save only the new candidates to a rules file"],
     ],
