@@ -20,6 +20,16 @@ describe("loadOrFetchComments", () => {
     expect(messages[1]).toContain("GitHub is not contacted");
   });
 
+  it("reads and writes gzip-compressed snapshots for a .gz path", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "snap-")), "o-r.json.gz");
+    let fetches = 0;
+    const fetchIt = async () => (fetches++, [comment]);
+    expect(await loadOrFetchComments(path, "o/r", fetchIt)).toEqual([comment]);
+    expect((await readFile(path)).subarray(0, 2).toString("hex")).toBe("1f8b");
+    expect(await loadOrFetchComments(path, "o/r", fetchIt)).toEqual([comment]);
+    expect(fetches).toBe(1);
+  });
+
   it("does not use or write a file when no path is given", async () => {
     let fetches = 0;
     await loadOrFetchComments(undefined, "o/r", async () => (fetches++, []));
