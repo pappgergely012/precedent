@@ -24,13 +24,14 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
     ],
   },
   approve: {
-    usage: ["precedent approve [--from FILE] [--to FILE] [--list | --id ID ... | --all-core]"],
+    usage: ["precedent approve [--from FILE] [--to FILE] [--list | --id ID ... | --all-core] [--note TEXT]"],
     about: "Pin the rules your team has read and accepted into a team-owned file (default .precedent/approved.json). Without a selection it lists the candidates and their ids. Approved rules are never changed or replaced by a later run; `export` and `review` use that file when it exists. No model, no API key.",
     flags: [
       ["--from FILE", "the candidates (default .precedent/rules.json)"],
       ["--to FILE", "the approved file (default .precedent/approved.json)"],
       ["--id ID / --all-core", "approve these rules / every core rule (read them first)"],
       ["--list", "list the candidates and ids"],
+      ["--note TEXT", "a note stored with the rules approved by this command (shown by approve and compare; never exported, never sent to a model)"],
     ],
   },
   compare: {

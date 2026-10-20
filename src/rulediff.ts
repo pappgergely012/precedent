@@ -41,6 +41,8 @@ export function wordingSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : [...x].filter((w) => y.has(w)).length / union;
 }
 
+const noteOf = (r: Rule) => (r.note ? ` [note: ${safeLine(r.note, 120)}]` : "");
+
 const norm = (text: string) => text.toLowerCase().replace(/\s+/g, " ").replace(/[.\s]+$/, "").trim();
 
 function sharedComments(a: Rule, b: Rule): { shared: number; smaller: number } {
@@ -104,9 +106,9 @@ export function renderRuleDiff(diff: RuleDiff): string {
       ...(diff.sharing.get(r) ?? []).slice(0, 2).map((h) => `      related to approved: ${safeLine(h.approved.description, 120)} (${h.shared} shared comment${h.shared === 1 ? "" : "s"})`),
     ]),
   );
-  section("Reworded (approved text is kept)", diff.reworded.map((m) => `  ~ approved: ${safeLine(m.approved.description)}\n    new run:  ${safeLine(m.fresh.description)}`));
-  section("Related: same evidence, different wording (decide if it is the same rule)", diff.related.map((m) => `  ? approved: ${safeLine(m.approved.description)}\n    new run:  ${safeLine(m.fresh.description)} (${Math.round(m.overlap * 100)}% of comments shared)`));
-  section("Approved but not found again (keep unless the team retires it)", diff.missing.map((r) => `  - ${safeLine(r.description)}`));
+  section("Reworded (approved text is kept)", diff.reworded.map((m) => `  ~ approved: ${safeLine(m.approved.description)}${noteOf(m.approved)}\n    new run:  ${safeLine(m.fresh.description)}`));
+  section("Related: same evidence, different wording (decide if it is the same rule)", diff.related.map((m) => `  ? approved: ${safeLine(m.approved.description)}${noteOf(m.approved)}\n    new run:  ${safeLine(m.fresh.description)} (${Math.round(m.overlap * 100)}% of comments shared)`));
+  section("Approved but not found again (keep unless the team retires it)", diff.missing.map((r) => `  - ${safeLine(r.description)}${noteOf(r)}`));
   section("Cannot be matched (no source comments)", diff.unmatchable.map((r) => `  ! ${safeLine(r.description)}`));
   return lines.join("\n");
 }

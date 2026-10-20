@@ -15,6 +15,11 @@ export const RuleSchema = z.object({
    * or "conflict" (the guide says something that contradicts it).
    */
   origin: z.enum(["enforced", "both", "conflict"]).optional(),
+  /**
+   * A person's note, set by `approve --note`. For people only: shown by `approve` and `compare`, never written into an
+   * export, never part of a model prompt.
+   */
+  note: z.string().max(500).optional(),
   /** Where the guide states (or contradicts) the rule, quoted verbatim. */
   docRefs: z.array(z.object({ path: z.string(), quote: z.string() })).optional(),
   /** Review comments this rule was derived from. Empty for a rule your team wrote by hand. */
