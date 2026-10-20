@@ -23,6 +23,15 @@ const SECTIONS: Record<string, { usage: string[]; about: string; flags: [string,
       ["--comments-file FILE", "use a saved snapshot of the comments"],
     ],
   },
+  compare: {
+    usage: ["precedent compare --approved FILE [--rules FILE] [--out FILE]"],
+    about: "Treat a new run as a diff against the rules your team already approved. Rules are matched by the review comments they cite, not by wording. The approved file is never changed; --out saves the new candidates for a person to review. No model, no API key.",
+    flags: [
+      ["--approved FILE", "the rules file your team approved"],
+      ["--rules FILE", "the new run (default .precedent/rules.json)"],
+      ["--out FILE", "save only the new candidates to a rules file"],
+    ],
+  },
   export: {
     usage: ["precedent export --format claude|agents|cursor [--rules FILE] [--out FILE] [--min-confidence N] [--max-rules N] [--include-single-reviewer] [--include-emerging]"],
     about: "Write the core rules into CLAUDE.md, AGENTS.md or .cursorrules between markers. No network, no model. Read the result before committing it.",
