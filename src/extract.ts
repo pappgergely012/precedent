@@ -1,4 +1,5 @@
 import { dropReason } from "./rulefilter.js";
+import { safeLine } from "./terminal.js";
 import { z } from "zod";
 import type { ReviewComment } from "./github.js";
 import type { PrincipleCache } from "./cache.js";
@@ -621,7 +622,7 @@ async function mineRules(comments: ReviewComment[], llm: Llm, opts: ExtractOptio
     `Kept ${rules.length} of ${merged.length} merged rules; dropped ${tooFewComments} with fewer than ${minOccurrences} comments and ${tooFewPrs} with fewer than ${minPullRequests} distinct pull requests`,
   );
   if (droppedByFilter > 0) log(`Dropped ${droppedByFilter} rules that are not in English or are about tool-generated files`);
-  for (const text of droppedTexts) opts.onDetail?.(`  filtered: ${text}`);
+  for (const text of droppedTexts) opts.onDetail?.(`  filtered: ${safeLine(text, 300)}`);
   if (rules.length === 0) return rules;
 
   log(`Auditing ${rules.length} rules against the comments they cite`);

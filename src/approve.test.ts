@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -73,5 +73,46 @@ describe("cli approve, export and compare with the approved file", () => {
     const res = sh(["compare"]);
     expect(res.status).toBe(0);
     expect(res.stdout).toContain("Compared with the approved rules: 1 unchanged, 0 reworded, 1 new, 0 not found again");
+  });
+});
+
+describe("cli: files are never overwritten by their own output", () => {
+  const cli = resolve("src/cli.ts");
+  const tsx = resolve("node_modules/.bin/tsx");
+  const dir = mkdtempSync(join(tmpdir(), "precedent-safe-"));
+  const sh = (args: string[]) => spawnSync(tsx, [cli, ...args], { cwd: dir, encoding: "utf8", env: { ...process.env, PRECEDENT_ANTHROPIC_API_KEY: "", GITHUB_TOKEN: "" } });
+  const put = (name: string, repo: string, rules: Rule[]) => writeFileSync(join(dir, name), JSON.stringify({ version: 1, repo, minedAt: "2026-10-20T00:00:00Z", rules }));
+  const three = [rule("r1", "One.", 1, 2, 3), rule("r2", "Two.", 4, 5, 6), rule("r3", "Three.", 7, 8, 9)];
+
+  it("compare --out equal to an input (also through a symlink) is refused and the file is untouched", () => {
+    put("a.json", "o/r", three);
+    put("b.json", "o/r", [rule("r9", "New.", 20, 21, 22)]);
+    symlinkSync("a.json", join(dir, "link.json"));
+    const before = readFileSync(join(dir, "a.json"), "utf8");
+    for (const out of ["a.json", "./a.json", "link.json", "b.json"]) {
+      const r = sh(["compare", "--approved", "a.json", "--rules", "b.json", "--out", out]);
+      expect(r.status, out).toBe(1);
+      expect(r.stderr).toContain("is one of the input files");
+    }
+    expect(readFileSync(join(dir, "a.json"), "utf8")).toBe(before);
+  });
+
+  it("approve refuses --to equal to --from", () => {
+    const r = sh(["approve", "--from", "a.json", "--to", "link.json", "--all-core"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("are the same file");
+  });
+
+  it("a broken rules file names the failing field, and different repos produce a warning", () => {
+    writeFileSync(join(dir, "bad.json"), JSON.stringify({ version: 1, repo: "o/r", minedAt: "x", rules: [{ id: "x" }] }));
+    expect(sh(["compare", "--approved", "bad.json", "--rules", "a.json"]).stderr).toMatch(/bad\.json is not a rules file: rules\.0\./);
+    put("other.json", "x/y", three);
+    const r = sh(["compare", "--approved", "a.json", "--rules", "other.json"]);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("Warning: the approved rules are for o/r but the new run is for x/y");
+  });
+
+  it("an option missing its value gets a one-line hint instead of the bare 'ambiguous' error", () => {
+    expect(sh(["mine", "o/r", "--cache", "--no-cache"]).stderr).toContain("cannot be followed by another option");
   });
 });

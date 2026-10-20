@@ -401,6 +401,17 @@ describe("extractRules detail output", () => {
     { rules: [{ description: "Add settings.local.json to .gitignore in .claude", scope: [".claude/**"], commentIds: [1, 2] }] },
   ];
 
+  it("prints a dropped rule's text on one line, without escape sequences or forged lines", async () => {
+    const evil = [
+      { items: [{ id: 1, principle: "Ignore .claude/settings.local.json" }, { id: 2, principle: "Ignore the .claude local settings" }] },
+      { rules: [{ description: "Add settings.local.json to .gitignore in .claude\n  filtered: FORGED \u001b[31mred\u001b[0m", scope: [".claude/**"], commentIds: [1, 2] }] },
+    ];
+    const lines: string[] = [];
+    await extractRules([comment(1), comment(2)], fakeLlm(...evil), { onDetail: (m) => lines.push(m) });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/[\u0000-\u001f]/);
+  });
+
   it("lists the texts of filtered rules only when asked, and the result is the same either way", async () => {
     const quiet = await extractRules([comment(1), comment(2)], fakeLlm(...answers()));
     const lines: string[] = [];

@@ -18,7 +18,8 @@ import { renderMineOutput } from "./mineoutput.js";
 import { helpFor } from "./help.js";
 import { createRedactor } from "./redact.js";
 import { stabilityCuts, summarizeStability } from "./stability.js";
-import { readRulesFile, writeRulesFile } from "./rulesfile.js";
+import { readRulesFile, samePath, writeRulesFile } from "./rulesfile.js";
+import { safeLine } from "./terminal.js";
 import { ruleTier } from "./rule.js";
 import { diffRules, renderRuleDiff } from "./rulediff.js";
 import { approveRules, selectCandidates } from "./approve.js";
@@ -39,7 +40,9 @@ function parseCli() {
   try {
     return parseArgs({ allowPositionals: true, options: OPTIONS });
   } catch (error) {
-    console.error(`${(error as Error).message.split("\n")[0]}\n\n${USAGE}`);
+    const first = (error as Error).message.split("\n")[0]!;
+    const hint = /ambiguous/.test(first) ? " An option that takes a value (for example --cache FILE) cannot be followed by another option; give it a value, or write --option=VALUE." : "";
+    console.error(`${first}${hint}\n\n${USAGE}`);
     process.exit(1);
   }
 }
@@ -252,18 +255,19 @@ async function main(): Promise<void> {
   } else if (command === "approve") {
     const fromPath = values.from ?? DEFAULT_RULES_FILE;
     const toPath = values.to ?? APPROVED_RULES_FILE;
-    const missing = (path: string) => (error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Rules file ${path} not found. Run "precedent mine owner/repo --out ${path}" first.` : `Cannot read ${path}: ${error.message.split("\n")[0]}`);
+    const missing = (path: string) => (error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Rules file ${path} not found. Run "precedent mine owner/repo --out ${path}" first.` : error.message.split("\n")[0]!);
     const candidates = await readRulesFile(fromPath).catch(missing(fromPath));
     if (values.list || (!values.id?.length && !values["all-core"])) {
-      for (const r of candidates.rules) console.log(`${r.id}  [${ruleTier(r)}] ${r.description.replace(/\s+/g, " ").slice(0, 140)} (${r.sources.length} comments)`);
+      for (const r of candidates.rules) console.log(`${safeLine(r.id, 40)}  [${ruleTier(r)}] ${safeLine(r.description, 140)} (${r.sources.length} comments)`);
       console.log(`\n${candidates.rules.length} candidates in ${fromPath}. Pick with --id ID (repeat for several) or --all-core; they are pinned into ${toPath}, which is yours to edit and commit.`);
     } else {
       const { chosen, unknown } = selectCandidates(candidates.rules, { ids: values.id, allCore: values["all-core"] });
       if (unknown.length > 0) fail(`No rule with id ${unknown.join(", ")} in ${fromPath}. Run "precedent approve --list" to see the ids.`);
+      if (samePath(fromPath, toPath)) fail(`--from and --to are the same file (${toPath}); refusing to overwrite the candidates with the approved rules.`);
       const existing = existsSync(toPath) ? await readRulesFile(toPath).catch(missing(toPath)) : undefined;
       if (existing && existing.repo !== candidates.repo) fail(`${toPath} is for ${existing.repo} but ${fromPath} is for ${candidates.repo}; refusing to mix them.`);
       const { rules, added, skipped } = approveRules(existing?.rules ?? [], chosen);
-      for (const s of skipped) console.log(`skipped: ${s.rule.description.replace(/\s+/g, " ").slice(0, 100)} (${s.reason})`);
+      for (const s of skipped) console.log(`skipped: ${safeLine(s.rule.description, 100)} (${safeLine(s.reason, 120)})`);
       if (added.length > 0) await writeRulesFile(toPath, candidates.repo, rules);
       console.log(`${added.length} rule(s) approved into ${toPath} (${rules.length} in total)${added.length === 0 ? "; nothing written" : ""}. Existing approved rules are never changed.`);
     }
@@ -271,9 +275,13 @@ async function main(): Promise<void> {
     const approvedPath = values.approved ?? (existsSync(APPROVED_RULES_FILE) ? APPROVED_RULES_FILE : undefined);
     if (!approvedPath) fail("compare needs --approved FILE (the rules your team approved) and --rules FILE (the new run).");
     const readFile_ = (path: string) =>
-      readRulesFile(path).catch((error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Rules file ${path} not found.` : `Cannot read ${path}: ${error.message.split("\n")[0]}`));
+      readRulesFile(path).catch((error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Rules file ${path} not found.` : error.message.split("\n")[0]!));
     const approvedFile = await readFile_(approvedPath);
     const freshFile = await readFile_(values.rules ?? DEFAULT_RULES_FILE);
+    if (values.out && [approvedPath, values.rules ?? DEFAULT_RULES_FILE].some((input) => samePath(input, values.out!))) {
+      fail(`--out ${values.out} is one of the input files; refusing to overwrite it. Choose another file.`);
+    }
+    if (approvedFile.repo !== freshFile.repo) console.error(`Warning: the approved rules are for ${safeLine(approvedFile.repo, 80)} but the new run is for ${safeLine(freshFile.repo, 80)}; the comparison is probably not meaningful.`);
     const diff = diffRules(approvedFile.rules, freshFile.rules);
     console.log(renderRuleDiff(diff));
     if (values.out) {
@@ -285,7 +293,7 @@ async function main(): Promise<void> {
     if (format !== "claude" && format !== "agents" && format !== "cursor") fail("--format must be one of: claude, agents, cursor.");
     const rulesPath = values.rules ?? defaultRulesPath();
     const file = await readRulesFile(rulesPath).catch((error: NodeJS.ErrnoException) =>
-      fail(error.code === "ENOENT" ? `Rules file ${rulesPath} not found. Run "precedent mine owner/repo --out ${rulesPath}" first.` : `Cannot read ${rulesPath}: ${error.message.split("\n")[0]}`),
+      fail(error.code === "ENOENT" ? `Rules file ${rulesPath} not found. Run "precedent mine owner/repo --out ${rulesPath}" first.` : error.message.split("\n")[0]!),
     );
     const minConfidence = values["min-confidence"] === undefined ? undefined : Number(values["min-confidence"]);
     if (minConfidence !== undefined && !(minConfidence >= 0 && minConfidence <= 1)) fail("--min-confidence needs a number between 0 and 1.");
@@ -373,7 +381,7 @@ async function main(): Promise<void> {
 
     const reviewRulesPath = values.rules ?? defaultRulesPath();
     const { rules } = await readRulesFile(reviewRulesPath).catch((error: NodeJS.ErrnoException) =>
-      fail(error.code === "ENOENT" ? `Rules file ${reviewRulesPath} not found. Run "precedent mine owner/repo --out ${reviewRulesPath}" first.` : `Cannot read ${reviewRulesPath}: ${error.message.split("\n")[0]}`),
+      fail(error.code === "ENOENT" ? `Rules file ${reviewRulesPath} not found. Run "precedent mine owner/repo --out ${reviewRulesPath}" first.` : error.message.split("\n")[0]!),
     );
     const diffText = values.diff
       ? await readFile(values.diff, "utf8").catch((error: NodeJS.ErrnoException) => fail(error.code === "ENOENT" ? `Diff file ${values.diff} not found.` : `Cannot read ${values.diff}: ${error.message.split("\n")[0]}`))

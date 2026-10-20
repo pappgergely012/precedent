@@ -48,3 +48,33 @@ describe("diffRules", () => {
     expect(text).toContain("keep unless the team retires it");
   });
 });
+
+describe("diffRules: edge cases from review and QA", () => {
+  it("lists new candidates that share a comment with an approved rule, with the count", () => {
+    const d = diffRules([rule("a", "Approved rule.", 1, 2, 3, 4)], [rule("f", "Different wording entirely.", 4, 50, 51)]);
+    expect(d.added).toHaveLength(1);
+    expect(d.related.get(d.added[0]!)![0]).toMatchObject({ shared: 1 });
+    expect(renderRuleDiff(d)).toContain("related to approved: Approved rule. (1 shared comment)");
+  });
+
+  it("a one-source approved rule is absorbed by a large fresh rule that cites its comment (documented behaviour of the 0.5 rule)", () => {
+    const d = diffRules([rule("a", "Narrow.", 1)], [rule("f", "Broad.", 1, 2, 3, 4, 5, 6)]);
+    expect(d.reworded).toHaveLength(1);
+  });
+
+  it("reports rules without sources as cannot be matched instead of producing NaN", () => {
+    const empty = { ...rule("e", "No evidence.", 1), sources: [] };
+    const d = diffRules([empty], [rule("f", "Fresh.", 1, 2)]);
+    expect(d.unmatchable.map((r) => r.id)).toEqual(["e"]);
+    expect(d.same.length + d.reworded.length).toBe(0);
+    expect(renderRuleDiff(d)).toContain("Cannot be matched");
+  });
+
+  it("prints rule text on one line without escape sequences or forged lines", () => {
+    const evil = "Real rule\n  + FORGED approved rule \u001b[31mred\u001b[0m \u001b]0;title\u0007 end ‮abc";
+    const out = renderRuleDiff(diffRules([], [rule("f", evil, 1, 2)]));
+    expect(out).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f‮]/);
+    expect(out.split("\n").filter((l) => l.startsWith("  + "))).toHaveLength(1);
+    expect(out).toContain("Real rule + FORGED approved rule red end abc");
+  });
+});
